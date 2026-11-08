@@ -3,7 +3,6 @@ import math
 import random
 import re
 import time
-import urllib.parse
 import subprocess
 from pathlib import Path
 from datetime import datetime
@@ -11,14 +10,10 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-import requests
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import VideoClip, AudioFileClip
 
-# ==========================================
-# 1. КОНФІГУРАЦІЯ
-# ==========================================
 class Config:
     TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "@glavni_novyny")
     CHANNEL_DISPLAY_NAME = os.getenv("CHANNEL_DISPLAY_NAME", "ГОЛОВНІ НОВИНИ UA")
@@ -35,10 +30,7 @@ class Config:
 Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# ==========================================
-# 2. ОЧИЩЕННЯ ТЕКСТУ (БЕЗ СМАЙЛИКІВ)
-# ==========================================
-def clean_for_tts(text: str) -> str:
+def clean_text_for_tts(text: str) -> str:
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"t\.me/\S+", "", text)
     text = re.sub(r"@[a-zA-Z0-9_]+", "", text)
@@ -51,71 +43,35 @@ def clean_for_tts(text: str) -> str:
     )
     text = emoji_pattern.sub(" ", text)
     text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
-# ==========================================
-# 3. ШІ-ГЕНЕРАТОР БАЙТ-ЗОБРАЖЕННЯ
-# ==========================================
-def generate_ai_bait_image(prompt_text: str, output_path: Path) -> Optional[Path]:
-    """Генерує фотореалістичний кінематографічний кадр під тему новини безкоштовно через Pollinations AI"""
-    try:
-        clean_prompt = clean_for_tts(prompt_text)[:120]
-        # Промпт для фотореалістичного кадру
-        full_prompt = f"cinematic dramatic breaking news photo, 8k resolution, photorealistic, {clean_prompt}, hyperrealistic, octane render, dramatic lighting"
-        encoded = urllib.parse.quote(full_prompt)
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=1920&nologo=true"
-        r = requests.get(url, timeout=20)
-        if r.status_code == 200 and len(r.content) > 10000:
-            with open(output_path, "wb") as f:
-                f.write(r.content)
-            return output_path
-    except Exception as e:
-        print(f"[AI Image Error] {e}")
-    return None
+def parse_news_content(raw_post: str) -> Dict[str, str]:
+    clean = clean_text_for_tts(raw_post)
+    lines = [l.strip() for l in clean.split("\n") if len(l.strip()) > 5]
+    
+    # Виділяємо головний заголовок
+    if lines:
+        headline = lines[0][:45].upper()
+        content_body = " ".join(lines[1:]) if len(lines) > 1 else lines[0]
+    else:
+        headline = "ТЕРМІНОВА НОВИНА"
+        content_body = clean
 
-# ==========================================
-# 4. СЦЕНАРІЙ (МЕГА-БАЙТ)
-# ==========================================
-class ScriptGenerator:
-    HOOKS = [
-        "Увага: це вже не приховати, новина щойно розірвала мережу!",
-        "Терміново: те, про що повідомили, змінює все прямо зараз!",
-        "Шок: дивіться до кінця, це торкнеться кожного!",
-    ]
-    CLIFFHANGERS = [
-        "Але найскандальніший документ і відео без цензури ми вже виклали в закріпленому посиланні в шапці профілю!",
-        "Хто насправді за цим стоїть та ексклюзивні кадри вже в нашому Телеграм каналі. Посилання в шапці!",
-    ]
+    # Якщо текст задовгий — беремо суть перших 2-3 речень
+    sentences = [s.strip() for s in re.split(r"[.!?]+", content_body) if len(s.strip()) > 8]
+    core_news = ". ".join(sentences[:3]) if sentences else content_body[:180]
 
-    @classmethod
-    def generate(cls, raw_post: str) -> Dict[str, str]:
-        cleaned = clean_for_tts(raw_post)
-        words = cleaned.split()
-        headline = " ".join(words[:5]).upper() if len(words) >= 5 else "ТЕРМІНОВА НОВИНА"
-        if not headline.endswith(("!", "?", ".")):
-            headline += "!"
+    # Швидкий короткий заклик наприкінці
+    cta_voice = "Повний список та всі подробиці вже в нашому Телеграм каналі. Посилання в шапці профілю!"
+    full_voice = f"{headline}. {core_news}. {cta_voice}"
 
-        sentences = [s.strip() for s in re.split(r"[.!?]+", cleaned) if len(s.strip()) > 8]
-        body = sentences[0] if sentences else "З'явилися екстрені подробиці щодо останніх резонансних подій."
-        if len(body) > 140:
-            body = body[:137] + "..."
+    return {
+        "headline": headline,
+        "body": core_news,
+        "voiceover": clean_text_for_tts(full_voice)
+    }
 
-        hook = random.choice(cls.HOOKS)
-        cliff = random.choice(cls.CLIFFHANGERS)
-        full_voice = clean_for_tts(f"{hook} {body}. {cliff}")
-
-        return {
-            "headline": headline,
-            "hook": hook,
-            "body": body,
-            "cliffhanger": cliff,
-            "full_voiceover": full_voice,
-            "raw": raw_post
-        }
-
-# ==========================================
-# 5. ОЗВУЧКА ТА СУБТИТРИ (TTS)
-# ==========================================
 class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path):
@@ -126,7 +82,7 @@ class TTSEngine:
             pass
 
         if not out_p.exists() or out_p.stat().st_size < 100:
-            duration = max(8.0, min(22.0, len(text) / 14.0))
+            duration = max(8.0, min(24.0, len(text) / 14.0))
             cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:beep_factor=4:duration={duration}", "-filter:a", "volume=0.2", str(out_p)]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -145,107 +101,107 @@ class TTSEngine:
     @classmethod
     def chunks(cls, text: str, dur: float):
         words = text.split()
+        # По 2 слова для динамічного темпу
         chunks = [" ".join(words[i:i+2]) for i in range(0, len(words), 2)]
         t_chunk = dur / max(1, len(chunks))
         return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
 
-# ==========================================
-# 6. ВІДЕО-МОНТАЖ (БАЙТЕРСЬКИЙ ВІЗУАЛ)
-# ==========================================
 class VideoEngine:
     def __init__(self):
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         self.font_path = str(font_p)
-        self.font_badge = ImageFont.truetype(self.font_path, 28)
-        self.font_head = ImageFont.truetype(self.font_path, 42)
-        self.font_cta = ImageFont.truetype(self.font_path, 30)
+        self.font_tag = ImageFont.truetype(self.font_path, 26)
+        self.font_head = ImageFont.truetype(self.font_path, 40)
+        self.font_body = ImageFont.truetype(self.font_path, 32)
+        self.font_cta = ImageFont.truetype(self.font_path, 28)
 
     def _render_sub(self, text: str) -> Image.Image:
-        w, h = 1000, 240
+        w, h = 1000, 220
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype(self.font_path, 68)
+        font = ImageFont.truetype(self.font_path, 66)
         up = text.upper()
         tw = draw.textlength(up, font=font)
-        tx = max(10, (w - tw) // 2)
-        ty = (h - 68) // 2
+        tx = max(15, (w - tw) // 2)
+        ty = (h - 66) // 2
 
-        # Чорний жирний контур
+        # Контрастний обвід 6px
         for dx in range(-6, 7):
             for dy in range(-6, 7):
                 if dx*dx + dy*dy <= 36:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        # Неоново-жовтий колір
-        draw.text((tx, ty), up, font=font, fill=(255, 235, 10, 255))
+        # Яскравий зелений / жовтий колір
+        draw.text((tx, ty), up, font=font, fill=(46, 213, 115, 255))
         return img
 
-    def render(self, script_data: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, bg_image_path: Path):
+    def render(self, data: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, user_img_path: Optional[Path] = None):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # Підготовка фонового фото на повний екран
-        base_img = Image.open(bg_image_path).convert("RGB")
-        base_w, base_h = base_img.size
-        target_ratio = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
-        current_ratio = base_w / base_h
-
-        if current_ratio > target_ratio:
-            new_w = int(base_h * target_ratio)
-            base_img = base_img.crop(((base_w - new_w) // 2, 0, (base_w + new_w) // 2, base_h))
+        # Підготовка фону
+        if user_img_path and user_img_path.exists():
+            bg_raw = Image.open(user_img_path).convert("RGB")
         else:
-            new_h = int(base_w / target_ratio)
-            base_img = base_img.crop((0, (base_h - new_h) // 2, base_w, (base_h + new_h) // 2))
+            # Преміальний темний фон без дефектів
+            bg_raw = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (12, 16, 26))
 
-        base_img = base_img.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+        # Масштабуємо фон
+        bw, bh = bg_raw.size
+        tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+        if bw / bh > tr:
+            nw = int(bh * tr)
+            bg_base = bg_raw.crop(((bw - nw) // 2, 0, (bw + nw) // 2, bh))
+        else:
+            nh = int(bw / tr)
+            bg_base = bg_raw.crop((0, (bh - nh) // 2, bw, (bh + nh) // 2))
+        bg_base = bg_base.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
 
-        # Накладання віньєтки та затемнення
-        vignette = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 0))
-        v_draw = ImageDraw.Draw(vignette)
-        v_draw.rectangle([0, 0, Config.VIDEO_WIDTH, 450], fill=(5, 8, 15, 210))
-        v_draw.rectangle([0, Config.VIDEO_HEIGHT - 400, Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT], fill=(5, 8, 15, 230))
-        base_img.paste(vignette, (0, 0), vignette)
+        # Напівпрозоре затемнення, щоб текст читався на будь-якому фото
+        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 175))
+        bg_base.paste(dim, (0, 0), dim)
 
-        # Верхня плашка Breaking News
-        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 380), (0, 0, 0, 0))
-        t_draw = ImageDraw.Draw(top_bar)
-        t_draw.rounded_rectangle([40, 60, 360, 115], radius=12, fill=(220, 20, 35, 255))
-        t_draw.text((60, 72), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
-        t_draw.text((40, 140), script_data["headline"], font=self.font_head, fill=(255, 255, 255, 255))
-        t_draw.line([(40, 230), (Config.VIDEO_WIDTH - 40, 230)], fill=(255, 215, 0, 200), width=3)
+        # 1. Верхня плашка (зона безпечна від інтерфейсу TikTok)
+        header_overlay = Image.new("RGBA", (Config.VIDEO_WIDTH, 480), (0, 0, 0, 0))
+        h_draw = ImageDraw.Draw(header_overlay)
+        # Червоний бейдж
+        h_draw.rounded_rectangle([40, 140, 280, 195], radius=10, fill=(235, 45, 55, 255))
+        h_draw.text((60, 150), "НОВИНИ UA", font=self.font_tag, fill=(255, 255, 255, 255))
+        # Заголовок
+        h_draw.text((40, 220), data["headline"], font=self.font_head, fill=(255, 225, 30, 255))
+        h_draw.line([(40, 310), (Config.VIDEO_WIDTH - 40, 310)], fill=(255, 255, 255, 120), width=2)
 
-        # Нижня CTA плашка
-        cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 180), (0, 0, 0, 0))
-        c_draw = ImageDraw.Draw(cta_bar)
-        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 150], radius=24, fill=(210, 25, 40, 240), outline=(255, 215, 50, 255), width=3)
-        cta_text = "ПОВНЕ ВІДЕО ТА СПИСОК В ШАПЦІ ПРОФІЛЮ"
-        cw = c_draw.textlength(cta_text, font=self.font_cta)
-        c_draw.text(((Config.VIDEO_WIDTH - cw) // 2, 45), cta_text, font=self.font_cta, fill=(255, 255, 255, 255))
-        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(">>> Тисніть на посилання каналу <<<", font=self.font_badge)) // 2, 95), ">>> Тисніть на посилання каналу <<<", font=self.font_badge, fill=(255, 240, 160, 255))
+        # 2. Плашка каналу над безпечною зоною (Y=1450, не перекривається описом)
+        cta_overlay = Image.new("RGBA", (Config.VIDEO_WIDTH, 140), (0, 0, 0, 0))
+        c_draw = ImageDraw.Draw(cta_overlay)
+        c_draw.rounded_rectangle([50, 10, Config.VIDEO_WIDTH - 50, 110], radius=20, fill=(22, 30, 46, 240), outline=(42, 171, 238, 255), width=2)
+        cta_t = "ПОВНА НОВИНА В ЗАКРІПЛЕНОМУ ПОСИЛАННІ"
+        tw = c_draw.textlength(cta_t, font=self.font_cta)
+        c_draw.text(((Config.VIDEO_WIDTH - tw)//2, 28), cta_t, font=self.font_cta, fill=(255, 255, 255, 255))
+        sub_c = "Канал: " + Config.CHANNEL_USERNAME
+        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(sub_c, font=self.font_tag))//2, 68), sub_c, font=self.font_tag, fill=(42, 171, 238, 255))
 
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # Повільний кінематографічний зум фону (Ken Burns)
-            zoom = 1.0 + 0.05 * (t / max(1.0, duration))
-            zw = int(Config.VIDEO_WIDTH * zoom)
-            zh = int(Config.VIDEO_HEIGHT * zoom)
-            z_img = base_img.resize((zw, zh))
-            frame = z_img.crop(((zw - Config.VIDEO_WIDTH) // 2, (zh - Config.VIDEO_HEIGHT) // 2, (zw + Config.VIDEO_WIDTH) // 2, (zh + Config.VIDEO_HEIGHT) // 2)).convert("RGBA")
+            # Плавний повільний рух
+            zoom = 1.0 + 0.03 * (t / max(1.0, duration))
+            zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
+            z_img = bg_base.resize((zw, zh))
+            frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
-            # Оверлей плашок
-            frame.alpha_composite(top_bar, (0, 0))
+            # Накладаємо шари
+            frame.alpha_composite(header_overlay, (0, 0))
 
-            # Субтитри по центру
+            # Субтитри по центру екрана (Y = 880-920)
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
                     if s:
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width) // 2, 980))
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 900))
                     break
 
-            # Пульсуючий CTA внизу
-            pulse = int(3 * math.sin(t * 6.0))
-            frame.alpha_composite(cta_bar, (0, Config.VIDEO_HEIGHT - 220 + pulse))
+            # CTA у безпечній зоні
+            frame.alpha_composite(cta_overlay, (0, 1380))
             return np.array(frame.convert("RGB"))
 
         clip = VideoClip(make_frame, duration=duration).with_audio(audio_clip)
@@ -254,10 +210,7 @@ class VideoEngine:
         clip.close()
         return out_file
 
-# ==========================================
-# 7. WEB STUDIO ТА АВТОПОСТИНГ
-# ==========================================
-app = FastAPI(title="Telegram News Viral Studio")
+app = FastAPI(title="Viral News Video Studio")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -266,91 +219,76 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral News Video Studio Pro</title>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <title>News Reel Studio</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #070A10; --card: rgba(18, 24, 38, 0.9); --accent: #2AABEE; --gold: #FFD233; --red: #FF3B30; --green: #2ED573; }
+        :root { --bg: #07090E; --card: rgba(18, 24, 38, 0.95); --accent: #2ED573; --border: #243044; }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
-        body { background: radial-gradient(circle at top, #141E33 0%, #070A10 100%); color: #fff; min-height: 100vh; padding: 30px 15px; }
-        .container { max-width: 900px; margin: 0 auto; }
-        header { text-align: center; margin-bottom: 25px; }
-        header h1 { font-size: 30px; font-weight: 800; background: linear-gradient(135deg, #fff, #2AABEE); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .card { background: var(--card); border: 1px solid rgba(56, 75, 110, 0.4); border-radius: 20px; padding: 25px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); margin-bottom: 20px; }
-        textarea { width: 100%; height: 130px; background: rgba(8, 12, 20, 0.9); border: 1px solid #2B3A55; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 15px; resize: vertical; }
-        .upload-zone { border: 2px dashed #2B3A55; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #8E9BAE; font-size: 14px; margin-bottom: 15px; transition: 0.2s; }
-        .upload-zone:hover { border-color: var(--accent); color: #fff; }
-        .btn { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; transition: 0.2s; }
-        .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(42, 171, 238, 0.4); }
-        .btn:disabled { opacity: 0.5; }
-        .video-box { margin-top: 20px; border-radius: 16px; overflow: hidden; background: #000; display: none; border: 1px solid #2B3A55; }
-        video { width: 100%; max-height: 520px; object-fit: contain; }
-        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 15px; }
-        .soc-btn { background: rgba(255,255,255,0.06); border: 1px solid #2B3A55; padding: 12px; border-radius: 10px; color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
-        .soc-btn:hover { background: rgba(255,255,255,0.15); border-color: var(--accent); }
+        body { background: var(--bg); color: #fff; min-height: 100vh; padding: 25px 15px; }
+        .wrap { max-width: 800px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 20px; }
+        h1 { font-size: 26px; font-weight: 800; }
+        .box { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 22px; }
+        textarea { width: 100%; height: 140px; background: #0D121C; border: 1px solid var(--border); border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
+        .img-drop { border: 2px dashed var(--border); border-radius: 12px; padding: 15px; text-align: center; cursor: pointer; color: #8E9BAE; font-size: 14px; margin-bottom: 14px; }
+        .btn-go { background: linear-gradient(135deg, #2ED573, #1B9E51); color: #000; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
+        .btn-go:disabled { opacity: 0.5; }
+        #status { display: none; text-align: center; color: #FFD233; margin-top: 14px; font-weight: 700; font-size: 14px; }
+        .res-box { margin-top: 20px; display: none; }
+        video { width: 100%; max-height: 520px; border-radius: 14px; background: #000; }
+        .btn-dl { display: block; text-align: center; background: #2AABEE; color: #fff; text-decoration: none; padding: 14px; border-radius: 10px; font-weight: 700; margin-top: 10px; }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="wrap">
         <header>
-            <h1>⚡ Viral News Video Studio Pro</h1>
-            <p style="color:#8E9BAE; font-size:14px; margin-top:5px;">Автоматичний монтаж вірусного кінематографічного відео + автопостинг</p>
+            <h1>🎬 Генератор промо-відео TikTok / Reels</h1>
+            <p style="color:#8E9BAE; font-size:13px; margin-top:4px;">Без дурних ШІ-картинок, з чітким текстом новини та врахуванням зон TikTok</p>
         </header>
 
-        <div class="card">
-            <textarea id="newsText" placeholder="Просто вставте сюди пост вашої новини з Telegram..."></textarea>
+        <div class="box">
+            <textarea id="postTxt" placeholder="Вставте сюди текст новини з вашого Telegram-каналу..."></textarea>
             
-            <div class="upload-zone" onclick="document.getElementById('fileInp').click()">
-                📷 Додати фото з посту (якщо немає — ШІ згенерує кінематографічний кадр самостійно)
-                <input type="file" id="fileInp" accept="image/*" style="display:none;" onchange="showF(this)">
-                <div id="fileTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
+            <div class="img-drop" onclick="document.getElementById('imgInp').click()">
+                📷 Додати реальне фото/картинку з новини (за бажанням)
+                <input type="file" id="imgInp" accept="image/*" style="display:none;" onchange="showF(this)">
+                <div id="fName" style="color:var(--accent); font-weight:bold; margin-top:4px;"></div>
             </div>
 
-            <button class="btn" id="genBtn" onclick="run()">🚀 Змонтувати вірусне відео</button>
-            <div id="load" style="display:none; text-align:center; color:var(--gold); margin-top:15px; font-weight:600;">
-                ⏳ Генерація ШІ-кадру, озвучка без смайликів та кіно-монтаж... (45-60 сек)
-            </div>
+            <button class="btn-go" id="goBtn" onclick="generate()">🚀 Змонтувати ролик</button>
+            <div id="status">⏳ Очищення тексту від смайликів, дикторська озвучка та рендеринг...</div>
 
-            <div class="video-box" id="vBox">
+            <div class="res-box" id="resBox">
                 <video id="vPlay" controls></video>
-                <div style="padding:15px; border-top:1px solid #2B3A55;">
-                    <p style="font-size:14px; font-weight:bold; color:var(--gold); margin-bottom:10px;">🚀 Відвантажити готове відео в соцмережі:</p>
-                    <div class="social-grid">
-                        <a id="dl" class="soc-btn" style="background:#2ED573; color:#000;" download>⬇ Завантажити</a>
-                        <button class="soc-btn" onclick="postTo('YouTube Shorts')">▶ YouTube</button>
-                        <button class="soc-btn" onclick="postTo('TikTok')">🎵 TikTok</button>
-                        <button class="soc-btn" onclick="postTo('Instagram Reels')">📸 Reels</button>
-                        <button class="soc-btn" onclick="postTo('Facebook Reels')">📘 Facebook</button>
-                        <button class="soc-btn" onclick="postTo('Threads')">🧵 Threads</button>
-                    </div>
-                </div>
+                <a id="dlLink" class="btn-dl" download>⬇ Завантажити готовий MP4 для публікації</a>
             </div>
         </div>
     </div>
 
     <script>
         function showF(i) {
-            if(i.files && i.files[0]) document.getElementById('fileTxt').innerText = '✓ Обрано: ' + i.files[0].name;
+            if(i.files && i.files[0]) document.getElementById('fName').innerText = '✓ Обрано: ' + i.files[0].name;
         }
-        async function run() {
-            const btn = document.getElementById('genBtn');
-            const load = document.getElementById('load');
-            const box = document.getElementById('vBox');
+        async function generate() {
+            const btn = document.getElementById('goBtn');
+            const st = document.getElementById('status');
+            const box = document.getElementById('resBox');
             const vid = document.getElementById('vPlay');
-            const text = document.getElementById('newsText').value;
-            const file = document.getElementById('fileInp').files[0];
+            const txt = document.getElementById('postTxt').value;
+            const file = document.getElementById('imgInp').files[0];
 
             btn.disabled = true;
-            load.style.display = 'block';
+            st.style.display = 'block';
 
             try {
                 const fd = new FormData();
-                fd.append('text', text);
+                fd.append('text', txt);
                 if(file) fd.append('image', file);
                 const res = await fetch('/api/generate', { method: 'POST', body: fd });
                 const d = await res.json();
                 if(d.video_url) {
                     vid.src = d.video_url;
-                    document.getElementById('dl').href = d.video_url;
+                    document.getElementById('dlLink').href = d.video_url;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -358,49 +296,36 @@ async def home():
                 alert('Помилка: ' + e);
             } finally {
                 btn.disabled = false;
-                load.style.display = 'none';
+                st.style.display = 'none';
             }
-        }
-        function postTo(network) {
-            alert("🚀 Запит на публікацію в " + network + " прийнято! Якщо ваші API-ключі додані в налаштуваннях, ролик з'явиться в профілі автоматично. Або скористайтеся кнопкою «Завантажити» для моментальної вигрузки вручну.");
         }
     </script>
 </body>
 </html>"""
 
 @app.post("/api/generate")
-async def api_gen(text: Optional[str] = Form(None), image: Optional[UploadFile] = File(None)):
+async def api_generate(text: Optional[str] = Form(None), image: Optional[UploadFile] = File(None)):
     if not text or not text.strip():
-        text = "УВАГА: Верховна Рада щойно ухвалила скандальний закон про нові тарифи! Зміни торкнуться кожного вже з наступного місяця."
+        text = "УВАГА: Верховна Рада готує закон про платні дороги. Ставки затвердять до кінця 2027 року: від 2,30 євро за 100 км."
 
-    script_data = ScriptGenerator.generate(text)
+    parsed = parse_news_content(text)
 
-    # 1. Отримання фонового фото
-    bg_img_path = Config.TEMP_DIR / f"bg_{int(time.time())}.jpg"
+    user_img = None
     if image and image.filename:
-        with open(bg_img_path, "wb") as f:
+        user_img = Config.TEMP_DIR / f"u_{int(time.time())}_{image.filename}"
+        with open(user_img, "wb") as f:
             f.write(await image.read())
-    else:
-        # Автоматична генерація кінематографічного кадру під новину
-        gen_img = generate_ai_bait_image(script_data["headline"] + " " + script_data["body"], bg_img_path)
-        if not gen_img or not bg_img_path.exists():
-            # Резервний стильний темно-синій градієнт
-            im = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (12, 18, 28))
-            im.save(bg_img_path)
 
-    # 2. Озвучка без смайликів
-    temp_audio = Config.TEMP_DIR / f"voice_{int(time.time())}.mp3"
-    audio_path, duration = TTSEngine.generate(script_data["full_voiceover"], temp_audio)
-    sub_events = TTSEngine.chunks(script_data["full_voiceover"], duration)
+    temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
+    audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio)
+    sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
 
-    # 3. Кіно-монтаж
     engine = VideoEngine()
-    out_file = Config.OUTPUT_DIR / f"news_bait_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    engine.render(script_data, audio_path, sub_events, out_file, bg_img_path)
+    out_file = Config.OUTPUT_DIR / f"reel_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    engine.render(parsed, audio_path, sub_events, out_file, user_img)
 
-    # Прибирання тимчасових файлів
-    for p in [temp_audio, bg_img_path]:
-        if p.exists():
+    for p in [temp_audio, user_img]:
+        if p and p.exists():
             try: p.unlink()
             except Exception: pass
 
