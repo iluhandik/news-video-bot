@@ -6,10 +6,17 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir fastapi "uvicorn[standard]" python-multipart
+    pip install --no-cache-dir \
+    fastapi>=0.100.0 \
+    "uvicorn[standard]>=0.23.0" \
+    python-multipart>=0.0.6 \
+    moviepy>=2.0.0 \
+    Pillow>=9.5.0 \
+    numpy>=1.24.0 \
+    requests>=2.31.0 \
+    edge-tts>=6.1.9 \
+    aiohttp>=3.9.0
 
 COPY . .
 
