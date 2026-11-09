@@ -19,7 +19,7 @@ class Config:
     VOICE_RATE = "+10%"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
-    VIDEO_FPS = 30
+    VIDEO_FPS = 25
     BASE_DIR = Path(__file__).resolve().parent
     OUTPUT_DIR = BASE_DIR / "output_videos"
     TEMP_DIR = BASE_DIR / "temp"
@@ -40,11 +40,7 @@ def clean_for_tts(text: str) -> str:
     )
     text = emoji_pattern.sub(" ", text)
     text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"']", " ", text)
-    
-    # Виправляємо дефіси у словах на зразок 24-річний -> 24 річний
     text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
-    
-    # Прибираємо подвійні крапки та сміття
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -75,7 +71,6 @@ def parse_post(raw_post: str) -> Dict[str, str]:
         headline = "ТЕРМІНОВА НОВИНА"
         body_text = clean
 
-    # Природна плавна кінцівка без обривів
     cta = "Повні деталі дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
     voice = f"{headline}. {body_text}. {cta}"
 
@@ -122,26 +117,33 @@ class VideoEngine:
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         self.font_path = str(font_p)
         self.font_badge = ImageFont.truetype(self.font_path, 26)
-        self.font_head = ImageFont.truetype(self.font_path, 38)
+        self.font_head = ImageFont.truetype(self.font_path, 36)
         self.font_cta = ImageFont.truetype(self.font_path, 30)
         self.font_cta_sub = ImageFont.truetype(self.font_path, 22)
+        self.font_watermark = ImageFont.truetype(self.font_path, 24)
 
     def _render_sub(self, text: str) -> Image.Image:
         w, h = 1020, 220
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype(self.font_path, 68)
         up = text.upper()
+
+        # Автоматичний підбір розміру шрифту, щоб слово не обрізалося
+        font_size = 64
+        font = ImageFont.truetype(self.font_path, font_size)
+        while draw.textlength(up, font=font) > (w - 60) and font_size > 36:
+            font_size -= 4
+            font = ImageFont.truetype(self.font_path, font_size)
+
         tw = draw.textlength(up, font=font)
-        tx = max(15, (w - tw) // 2)
-        ty = (h - 68) // 2
+        tx = max(20, (w - tw) // 2)
+        ty = (h - font_size) // 2
 
         # Чорний контур
-        for dx in range(-6, 7):
-            for dy in range(-6, 7):
-                if dx*dx + dy*dy <= 36:
+        for dx in range(-5, 6):
+            for dy in range(-5, 6):
+                if dx*dx + dy*dy <= 25:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        # Жовте виділення
         draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
@@ -149,38 +151,46 @@ class VideoEngine:
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # 1. Розмитий Canvas Blur фон 9:16
+        # 1. Формування фону та центрального фото
         if user_img_path and user_img_path.exists():
-            orig = Image.open(user_img_path).convert("RGB")
-            bg_blur = orig.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.GaussianBlur(38))
-            dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 140))
-            bg_blur.paste(dim, (0, 0), dim)
+            try:
+                orig = Image.open(user_img_path).convert("RGB")
+                small = orig.resize((270, 480))
+                bg_blur = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR).filter(ImageFilter.BoxBlur(8))
+                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 160))
+                bg_blur.paste(dim, (0, 0), dim)
 
-            # Чітке центральне зображення
-            ow, oh = orig.size
-            nw = 1000
-            nh = int(oh * (nw / ow))
-            sharp_img = orig.resize((nw, nh))
-            sharp_y = (Config.VIDEO_HEIGHT - nh) // 2 - 60
+                ow, oh = orig.size
+                nw = 1000
+                nh = int(oh * (nw / ow))
+                sharp_img = orig.resize((nw, nh))
+                sharp_y = (Config.VIDEO_HEIGHT - nh) // 2 - 40
+            except Exception:
+                bg_blur = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (15, 22, 35))
+                sharp_img = None
+                sharp_y = 600
         else:
-            bg_blur = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (14, 18, 26))
+            bg_blur = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (15, 22, 35))
             sharp_img = None
             sharp_y = 600
 
         # 2. Верхній заголовок (з авто-переносом рядків)
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 420), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        
-        # Червоний бейдж «ТЕРМІНОВО»
-        t_draw.rounded_rectangle([40, 100, 320, 160], radius=12, fill=(225, 25, 35, 255))
-        t_draw.text((55, 112), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+        t_draw.rounded_rectangle([40, 95, 300, 155], radius=12, fill=(225, 25, 35, 255))
+        t_draw.text((55, 108), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Заголовок новини на 1-2 рядки без обрізань
+        # Фірмова вотермарка в правому кутку
+        wm_text = Config.CHANNEL_DISPLAY_NAME
+        wm_w = int(t_draw.textlength(wm_text, font=self.font_watermark))
+        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 95, Config.VIDEO_WIDTH - 40, 155], radius=12, fill=(20, 30, 45, 200), outline=(50, 70, 100, 255), width=1)
+        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 110), wm_text, font=self.font_watermark, fill=(255, 255, 255, 220))
+
         head_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
-        cur_hy = 185
+        cur_hy = 175
         for hl in head_lines[:2]:
             t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
-            cur_hy += 48
+            cur_hy += 46
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 220), width=3)
 
         # 3. Нижня плашка CTA
@@ -196,32 +206,21 @@ class VideoEngine:
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # Кінематографічний плавний Slow Zoom фону
-            zoom = 1.0 + 0.03 * (t / max(1.0, duration))
-            zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
-            z_bg = bg_blur.resize((zw, zh))
-            frame = z_bg.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+            frame = bg_blur.copy().convert("RGBA")
 
-            # Вставляємо чітке фото по центру з легким рухом
             if sharp_img:
-                szw = int(sharp_img.width * zoom)
-                szh = int(sharp_img.height * zoom)
-                z_sharp = sharp_img.resize((szw, szh))
-                crop_sharp = z_sharp.crop(((szw - 1000)//2, (szh - sharp_img.height)//2, (szw + 1000)//2, (szh + sharp_img.height)//2))
-                frame.paste(crop_sharp, ((Config.VIDEO_WIDTH - 1000)//2, sharp_y))
+                frame.paste(sharp_img, ((Config.VIDEO_WIDTH - 1000)//2, sharp_y))
 
-            # Верхня плашка заголовка
             frame.alpha_composite(top_bar, (0, 0))
 
-            # Динамічні субтитри під фото
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
                     if s:
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, sharp_y + (sharp_img.height if sharp_img else 500) + 30))
+                        # Субтитри розташовані на комфортній висоті
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1180))
                     break
 
-            # Нижня плашка в безпечній зоні
             frame.alpha_composite(cta_bar, (0, 1420))
             return np.array(frame.convert("RGB"))
 
@@ -267,21 +266,21 @@ async def home():
 <body>
     <div class="wrap">
         <header>
-            <h1>🎬 Студія вірусних новин (TikTok / Shorts)</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Без зрізання слів, з кінематографічним наближенням фото та чистим звуком</p>
+            <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
+            <p style="color:#8E9BAE; font-size:14px;">З вотермаркою каналу, повними субтитрами та швидким рендерингом</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати фото з посту (наприклад, фото стрільця)
+                📷 Додати фото з посту (натисніть, щоб обрати)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Монтаж: перенос заголовка, плавне наближення кадру та озвучка...</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
+            <div id="st">⏳ Монтаж відео та накладання вотермарки... (20-30 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -296,8 +295,12 @@ async def home():
     </div>
 
     <script>
+        let selectedFile = null;
         function showF(i) {
-            if(i.files && i.files[0]) document.getElementById('mTxt').innerText = '✓ Обрано: ' + i.files[0].name;
+            if(i.files && i.files[0]) {
+                selectedFile = i.files[0];
+                document.getElementById('mTxt').innerText = '✓ Обрано фото: ' + selectedFile.name;
+            }
         }
         async function gen() {
             const btn = document.getElementById('btn');
@@ -305,7 +308,6 @@ async def home():
             const box = document.getElementById('resBox');
             const vid = document.getElementById('vPlay');
             const txt = document.getElementById('pTxt').value;
-            const f = document.getElementById('mFile').files[0];
 
             btn.disabled = true;
             st.style.display = 'block';
@@ -313,8 +315,13 @@ async def home():
             try {
                 const fd = new FormData();
                 fd.append('text', txt);
-                if(f) fd.append('media', f);
+                if(selectedFile) {
+                    fd.append('media', selectedFile);
+                }
                 const res = await fetch('/api/generate', { method: 'POST', body: fd });
+                if (!res.ok) {
+                    throw new Error("Сервер повернув помилку (код " + res.status + ")");
+                }
                 const d = await res.json();
                 if(d.video_url) {
                     vid.src = d.video_url;
@@ -323,7 +330,7 @@ async def home():
                     vid.play();
                 }
             } catch(e) {
-                alert('Помилка: ' + e);
+                alert('Помилка: ' + e.message);
             } finally {
                 btn.disabled = false;
                 st.style.display = 'none';
@@ -336,7 +343,7 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadFile] = File(None)):
     if not text or not text.strip():
-        text = "ЧОЛОВІК, ЯКИЙ ВЧИНИВ СМЕРТЕЛЬНУ СТРІЛЯНИНУ В ЦЕНТРІ. 24 річний нападник вбив 6 людей."
+        text = "У ЛЬВОВІ ТРЕТЬОКЛАСНИКА ОШТРАФОВАНО ЗА ПОГРОЗИ ОДНОКЛАСНИКАМ. 9 річний учень погрожував ножем."
 
     parsed = parse_post(text)
 
