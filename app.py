@@ -49,18 +49,16 @@ def clean_for_tts(text: str) -> str:
 def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
     try:
         t_low = news_text.lower()
-        if any(w in t_low for w in ["школ", "учен", "клас", "діт", "вчител"]):
+        if any(w in t_low for w in ["кропивниц", "удар", "вибух", "світл", "підстанц", "обстріл"]):
+            scene = "smoke rising in city at night, emergency power outage, dramatic sky, documentary photography, 35mm"
+        elif any(w in t_low for w in ["школ", "учен", "клас", "діт", "вчител"]):
             scene = "hallway of modern school building, police officer talking with teachers, documentary press photography, natural light, 35mm"
         elif any(w in t_low for w in ["суд", "штраф", "закон", "рада", "депутат"]):
             scene = "courtroom interior, wooden judge bench, law gavel, official press photography, dramatic lighting"
         elif any(w in t_low for w in ["дорог", "авто", "тариф", "траса", "водій"]):
             scene = "modern highway toll gate station with cars, evening dusk, realistic editorial photography"
-        elif any(w in t_low for w in ["трамп", "сша", "байден", "президент"]):
-            scene = "press conference with microphones, american flags in background, documentary photojournalism"
-        elif any(w in t_low for w in ["поліц", "стрілян", "напад", "збро"]):
-            scene = "police cars with flashing emergency lights at dusk on city street, yellow caution tape, photojournalism"
         else:
-            scene = "breaking news scene, camera crew with microphones, police cordon in European city, documentary press photo"
+            scene = "breaking news scene, police cars with flashing lights on city street, documentary press photo"
 
         prompt = f"authentic candid photojournalism, {scene}, shot on 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
         enc = urllib.parse.quote(prompt)
@@ -77,18 +75,15 @@ def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
 
 def generate_seo(headline: str, body: str) -> Dict[str, str]:
     combined = (headline + " " + body).lower()
-    if any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
+    if any(k in combined for k in ["кропивниц", "удар", "світл", "підстанц"]):
+        tags = ["#кропивницький", "#обстріли", "#блекаут", "#новиниукраїни", "#війна"]
+        q = "Як зараз ситуація зі світлом у вашому районі? Пишіть у коментарях 👇"
+    elif any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
         tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція", "#резонанс"]
         q = "Як вважаєте, 1700 грн штрафу для батьків — це достатнє покарання? Пишіть у коментарях 👇"
     elif any(k in combined for k in ["дорог", "авто", "тариф", "проїзд", "водій"]):
         tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дороги", "#тарифи"]
         q = "Чи готові ви платити такі гроші за проїзд новими трасами? 👇"
-    elif any(k in combined for k in ["трамп", "сша", "байден", "політик"]):
-        tags = ["#трамп", "#сша", "#новинисвіту", "#геополітика", "#політика"]
-        q = "Що думаєте про такі заяви? Діліться думками в коментарях 👇"
-    elif any(k in combined for k in ["рада", "закон", "депутат", "уряд"]):
-        tags = ["#верховнарада", "#закониукраїни", "#депутати", "#політика"]
-        q = "Підтримуєте ухвалення такого закону? Обговорюємо нижче 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
         q = "Яка ваша думка щодо цієї ситуації? Пишіть у коментарях 👇"
@@ -118,21 +113,31 @@ def parse_post(raw_post: str) -> Dict[str, str]:
     clean = clean_for_tts(raw_post)
     lines = [l.strip() for l in raw_post.split("\n") if len(l.strip()) > 3]
     
-    if lines:
+    # Виділяємо заголовок і текст БЕЗ дублювання
+    if len(lines) > 1:
         headline = clean_for_tts(lines[0])
-        body_text = clean_for_tts(" ".join(lines[1:])) if len(lines) > 1 else clean_for_tts(lines[0])
+        body_text = clean_for_tts(" ".join(lines[1:]))
+        voice = f"{headline}. {body_text}."
     else:
-        headline = "ТЕРМІНОВА НОВИНА"
-        body_text = clean
+        # Якщо в пості лише один суцільний текст
+        sentences = [s.strip() for s in re.split(r"[.!?]+", clean) if len(s.strip()) > 5]
+        if len(sentences) > 1:
+            headline = sentences[0]
+            body_text = ". ".join(sentences[1:])
+            voice = f"{headline}. {body_text}."
+        else:
+            headline = clean[:50]
+            body_text = clean
+            voice = f"{clean}."
 
     cta = "Повні деталі дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
-    voice = f"{headline}. {body_text}. {cta}"
+    full_voice = f"{voice} {cta}"
     seo_data = generate_seo(headline, body_text)
 
     return {
         "headline": headline.upper(),
         "body": body_text,
-        "voiceover": clean_for_tts(voice),
+        "voiceover": clean_for_tts(full_voice),
         "seo_desc": seo_data["desc"]
     }
 
@@ -212,7 +217,6 @@ class VideoEngine:
 
         is_video_media = False
         user_video_clip = None
-        sharp_img = None
         bg_base = None
 
         if media_path and media_path.exists():
@@ -246,7 +250,7 @@ class VideoEngine:
         else:
             bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
 
-        # Верхній блок новини в безпечній зоні
+        # Верхній блок новини
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         
@@ -265,7 +269,7 @@ class VideoEngine:
             cur_hy += 48
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # Нижня плашка CTA в безпечній зоні
+        # Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -282,13 +286,11 @@ class VideoEngine:
                 raw_frame = user_video_clip.get_frame(sub_t)
                 v_img = Image.fromarray(raw_frame)
                 
-                # Розмиття фону на базі поточного кадру відео
                 bg_v = v_img.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.BoxBlur(12))
                 dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 140))
                 bg_v.paste(dim, (0, 0), dim)
                 frame = bg_v.convert("RGBA")
 
-                # Чітке відео по центру
                 frame.paste(v_img, ((Config.VIDEO_WIDTH - v_img.width)//2, 540))
             else:
                 zoom = 1.0 + 0.04 * (t / max(1.0, duration))
@@ -360,7 +362,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Підтримка живого відео та фото з посту + FLUX.1 генерація</p>
+            <p style="color:#8E9BAE; font-size:14px;">Без дублювання слів, з підтримкою відео та фото</p>
         </header>
 
         <div class="box">
@@ -373,7 +375,7 @@ async def home():
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Монтаж відео, озвучка та прорахунок хештегів... (30-45 сек)</div>
+            <div id="st">⏳ Монтаж відео, озвучка та прорахунок хештегів... (30-40 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -456,7 +458,7 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadFile] = File(None)):
     if not text or not text.strip():
-        text = "У ЛЬВОВІ ТРЕТЬОКЛАСНИКА ОШТРАФОВАНО ЗА ПОГРОЗИ ОДНОКЛАСНИКАМ. 9-річний учень погрожував ножем."
+        text = "ВОРОЖОГО УДАРУ ЗАЗНАВ КРОПИВНИЦЬКИЙ. Частина міста наразі без світла."
 
     parsed = parse_post(text)
 
