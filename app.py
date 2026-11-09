@@ -47,7 +47,6 @@ def clean_for_tts(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
-    """Генерує фотореалістичний репортажний кадр через модель FLUX.1 з високою деталізацією"""
     try:
         t_low = news_text.lower()
         if any(w in t_low for w in ["школ", "учен", "клас", "діт", "вчител"]):
@@ -65,7 +64,6 @@ def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
 
         prompt = f"authentic candid photojournalism, {scene}, shot on 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
         enc = urllib.parse.quote(prompt)
-        # Виклик моделі FLUX
         url = f"https://image.pollinations.ai/prompt/{enc}?model=flux&width=1080&height=1920&nologo=true&seed={int(time.time())}"
         
         r = requests.get(url, timeout=30)
@@ -78,9 +76,7 @@ def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
     return False
 
 def generate_seo(headline: str, body: str) -> Dict[str, str]:
-    """Розрахунок вірусного опису та хештегів під алгоритми рекомендацій"""
     combined = (headline + " " + body).lower()
-    
     if any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
         tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція", "#резонанс"]
         q = "Як вважаєте, 1700 грн штрафу для батьків — це достатнє покарання? Пишіть у коментарях 👇"
@@ -182,9 +178,10 @@ class VideoEngine:
     def __init__(self):
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         self.font_path = str(font_p)
-        self.font_badge = ImageFont.truetype(self.font_path, 24)
-        self.font_head = ImageFont.truetype(self.font_path, 36)
+        self.font_badge = ImageFont.truetype(self.font_path, 26)
+        self.font_head = ImageFont.truetype(self.font_path, 38)
         self.font_cta = ImageFont.truetype(self.font_path, 28)
+        self.font_watermark = ImageFont.truetype(self.font_path, 30)
 
     def _render_sub(self, text: str) -> Image.Image:
         w, h = 1020, 220
@@ -202,7 +199,6 @@ class VideoEngine:
         tx = max(20, (w - tw) // 2)
         ty = (h - font_size) // 2
 
-        # Чорний обвід для чіткості
         for dx in range(-5, 6):
             for dy in range(-5, 6):
                 if dx*dx + dy*dy <= 25:
@@ -214,9 +210,13 @@ class VideoEngine:
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # Підготовка зображення на весь екран 9:16
+        # Підготовка зображення 9:16
         if user_img_path and user_img_path.exists():
             orig = Image.open(user_img_path).convert("RGB")
+            # Обрізаємо нижні 50px картинки, щоб гарантовано видалити сторонній логотип
+            ow, oh = orig.size
+            if oh > 100:
+                orig = orig.crop((0, 0, ow, oh - 60))
         else:
             orig = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
 
@@ -231,29 +231,32 @@ class VideoEngine:
         bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
         
         # Легке затемнення
-        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 115))
+        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
         bg_base.paste(dim, (0, 0), dim)
 
-        # 1. Верхній блок «ТЕРМІНОВО»
-        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 400), (0, 0, 0, 0))
+        # 1. Верхній блок новини (ОПУЩЕНИЙ НА РІВЕНЬ Y = 260px - БЕЗПЕЧНА ЗОНА ТІКТОКУ)
+        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        t_draw.rounded_rectangle([40, 90, 280, 150], radius=12, fill=(225, 25, 35, 255))
-        t_draw.text((55, 102), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+        
+        # Червоний бейдж «ТЕРМІНОВО»
+        t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
+        t_draw.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Вотермарка праворуч
+        # Велика яскрава вотермарка каналу праворуч
         wm = Config.CHANNEL_DISPLAY_NAME
-        wm_w = int(t_draw.textlength(wm, font=self.font_badge))
-        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 90, Config.VIDEO_WIDTH - 40, 150], radius=12, fill=(20, 30, 45, 220), outline=(50, 75, 110, 255), width=1)
-        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 104), wm, font=self.font_badge, fill=(255, 255, 255, 220))
+        wm_w = int(t_draw.textlength(wm, font=self.font_watermark))
+        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
+        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
+        # Заголовок новини
         h_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
-        cur_hy = 175
+        cur_hy = 345
         for hl in h_lines[:2]:
             t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
-            cur_hy += 46
-        t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 220), width=3)
+            cur_hy += 48
+        t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # 2. Нижня плашка CTA
+        # 2. Нижня плашка CTA (піднята до Y = 1380, щоб не накладатися на опис TikTok)
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -265,7 +268,6 @@ class VideoEngine:
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # Кінематографічне повільне наближення
             zoom = 1.0 + 0.04 * (t / max(1.0, duration))
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
             z_img = bg_base.resize((zw, zh))
@@ -278,10 +280,11 @@ class VideoEngine:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
                     if s:
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1100))
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1080))
                     break
 
-            frame.alpha_composite(cta_bar, (0, 1420))
+            # Нижня плашка
+            frame.alpha_composite(cta_bar, (0, 1360))
             return np.array(frame.convert("RGB"))
 
         clip = VideoClip(make_frame, duration=duration).with_audio(audio_clip)
@@ -321,7 +324,7 @@ async def home():
         .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
         .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
         .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
-        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; }
         .btn-dl { background: var(--green); color: #000; }
         .btn-tt { background: #000; color: #fff; border: 1px solid #333; }
         .btn-yt { background: #FF0000; color: #fff; }
@@ -333,26 +336,25 @@ async def home():
 <body>
     <div class="wrap">
         <header>
-            <h1>🎬 Студія новин NEWS УКРАЇНА 365 (FLUX.1)</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Генерація репортажного кадру через FLUX + розумне SEO та кнопки вигрузки</p>
+            <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
+            <p style="color:#8E9BAE; font-size:14px;">100% сумісність із безпечними зонами TikTok та помітна вотермарка</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати своє фото з новини (якщо немає — FLUX згенерує кадр автоматично)
+                📷 Додати своє фото з новини (якщо немає — нейромережа підбере автоматично)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Генерація фото через нейромережу FLUX.1, озвучка та прорахунок хештегів... (30-40 сек)</div>
+            <div id="st">⏳ Монтаж у безпечних зонах TikTok та накладання вотермарки... (30-40 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
-                <!-- Блок SEO під рекомендації -->
                 <div class="seo-box">
                     <div class="seo-title">
                         <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
@@ -361,7 +363,6 @@ async def home():
                     <div class="seo-text" id="seoContent"></div>
                 </div>
 
-                <!-- Кнопки швидкого переходу -->
                 <div class="social-title">🚀 Завантажити та відвантажити в соцмережі:</div>
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
@@ -442,7 +443,6 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
         with open(media_p, "wb") as f:
             f.write(await media.read())
     else:
-        # Автоматична ШІ-генерація репортажного кадру через FLUX
         flux_img = Config.TEMP_DIR / f"flux_{int(time.time())}.jpg"
         if generate_pro_flux_image(parsed["headline"] + " " + parsed["body"], flux_img):
             media_p = flux_img
