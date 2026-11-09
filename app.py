@@ -42,6 +42,38 @@ def clean_text_for_tts(text: str) -> str:
     text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"']", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
+def generate_seo_metadata(headline: str, body: str) -> Dict[str, str]:
+    """Генерує вірусний опис та хештеги індивідуально під зміст новини для залітання в рекомендації"""
+    full_text_lower = (headline + " " + body).lower()
+    
+    # Визначення тематики та цільових тегів
+    topic_tags = []
+    if any(k in full_text_lower for k in ["дорог", "авто", "тариф", "проїзд", "водій", "штраф"]):
+        topic_tags = ["#платнідороги", "#водіїукраїни", "#автоукраїна", "#дорогиукраїни", "#тарифи"]
+        question = "Що думаєте про такі тарифи? Пишіть у коментарях 👇"
+    elif any(k in full_text_lower for k in ["трамп", "сша", "байден", "переговори", "вибори"]):
+        topic_tags = ["#трамп", "#сша", "#новинисвіту", "#геополітика", "#політика"]
+        question = "Як ви ставитеся до такої заяви? Діліться думками 👇"
+    elif any(k in full_text_lower for k in ["пенсі", "виплат", "зарплат", "грош", "банк", "курс"]):
+        topic_tags = ["#виплати", "#пенсії", "#грошіукраїна", "#фінанси", "#соціалка"]
+        question = "Чи вистачає цих коштів зараз? Ваша думка в коментарях 👇"
+    elif any(k in full_text_lower for k in ["рада", "закон", "депутат", "уряд", "зеленськ"]):
+        topic_tags = ["#верховнарада", "#закониукраїни", "#політикаукраїни", "#слуганароду"]
+        question = "Підтримуєте таке рішення депутатів? 👇"
+    else:
+        topic_tags = ["#резонанс", "#терміново", "#важливознати"]
+        question = "Що ви думаєте з цього приводу? Обговорюємо в коментарях 👇"
+
+    base_tags = ["#новиниукраїни", "#новини", "#українасьогодні", "#рек", "#рекомендації", "#тренди"]
+    all_hashtags = " ".join(topic_tags + base_tags)
+
+    description = f"{headline}! {question}\n\nПовні подробиці та першоджерело дивіться за посиланням у шапці профілю!\n\n{all_hashtags}"
+    
+    return {
+        "description": description,
+        "hashtags": all_hashtags
+    }
+
 def parse_post(raw_post: str) -> Dict[str, str]:
     lines = [l.strip() for l in raw_post.split("\n") if len(l.strip()) > 3]
     if lines:
@@ -54,10 +86,14 @@ def parse_post(raw_post: str) -> Dict[str, str]:
     cta = "Повні деталі дивіться в нашому Телеграм каналі. Посилання в шапці профілю!"
     voice = f"{headline}. {body}. {cta}"
 
+    seo = generate_seo_metadata(headline, body)
+
     return {
         "headline": headline,
         "body": body[:200],
-        "voiceover": clean_text_for_tts(voice)
+        "voiceover": clean_text_for_tts(voice),
+        "seo_description": seo["description"],
+        "seo_hashtags": seo["hashtags"]
     }
 
 class TTSEngine:
@@ -96,7 +132,7 @@ class VideoEngine:
     def __init__(self):
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         self.font_path = str(font_p)
-        self.font_head = ImageFont.truetype(self.font_path, 42)
+        self.font_head = ImageFont.truetype(self.font_path, 40)
         self.font_sub = ImageFont.truetype(self.font_path, 24)
         self.font_cta = ImageFont.truetype(self.font_path, 30)
 
@@ -110,7 +146,7 @@ class VideoEngine:
         tx = max(10, (w - tw) // 2)
         ty = (h - 68) // 2
 
-        # Чорний контур 6px
+        # Чорний контур
         for dx in range(-6, 7):
             for dy in range(-6, 7):
                 if dx*dx + dy*dy <= 36:
@@ -122,29 +158,25 @@ class VideoEngine:
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # 1. Створення кінематографічного фону (Canvas Blur на весь екран 9:16)
+        # 1. Розмитий фон Canvas Blur 9:16
         if user_img_path and user_img_path.exists():
             orig_img = Image.open(user_img_path).convert("RGB")
-            # Розмитий задній план на весь екран
             bg_blurred = orig_img.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.GaussianBlur(35))
-            # Затемнення заднього плану
             dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 140))
             bg_blurred.paste(dim, (0, 0), dim)
 
-            # Чітке фото по центру (ширина 1000px зі збереженням пропорцій)
             ow, oh = orig_img.size
             nw = 1000
             nh = int(oh * (nw / ow))
             sharp_img = orig_img.resize((nw, nh))
 
-            # Вставляємо чітке фото по центру
             sharp_y = (Config.VIDEO_HEIGHT - nh) // 2 - 80
             bg_blurred.paste(sharp_img, ((Config.VIDEO_WIDTH - nw) // 2, sharp_y))
             final_bg = bg_blurred
         else:
             final_bg = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (15, 20, 30))
 
-        # 2. Верхня плашка новини (стиль новинного каналу)
+        # 2. Верхній заголовок
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 350), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         t_draw.rounded_rectangle([40, 110, 340, 175], radius=12, fill=(225, 25, 35, 255))
@@ -152,7 +184,7 @@ class VideoEngine:
         t_draw.text((40, 205), parsed["headline"], font=self.font_head, fill=(255, 255, 255, 255))
         t_draw.line([(40, 290), (Config.VIDEO_WIDTH - 40, 290)], fill=(255, 215, 0, 200), width=3)
 
-        # 3. Нижня плашка заклику (у безпечній зоні)
+        # 3. Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 240), outline=(42, 171, 238, 255), width=2)
@@ -165,16 +197,13 @@ class VideoEngine:
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # Плавне ледь помітне наближення фону
             zoom = 1.0 + 0.02 * (t / max(1.0, duration))
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
             z_img = final_bg.resize((zw, zh))
             frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
-            # Накладаємо заголовок
             frame.alpha_composite(top_bar, (0, 0))
 
-            # Субтитри в зоні очей (під фото, без накладання)
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
@@ -182,7 +211,6 @@ class VideoEngine:
                         frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1150))
                     break
 
-            # Плашка заклику внизу
             frame.alpha_composite(cta_bar, (0, 1420))
             return np.array(frame.convert("RGB"))
 
@@ -192,7 +220,7 @@ class VideoEngine:
         clip.close()
         return out_file
 
-app = FastAPI(title="News Reel Studio")
+app = FastAPI(title="Viral News Studio Pro")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -201,49 +229,87 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News Studio</title>
+    <title>Viral News Studio</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
-        body { background: #080C14; color: #fff; font-family: 'Plus Jakarta Sans', sans-serif; min-height: 100vh; padding: 25px 15px; margin: 0; }
-        .wrap { max-width: 800px; margin: 0 auto; }
+        :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+        body { background: var(--bg); color: #fff; min-height: 100vh; padding: 25px 15px; }
+        .wrap { max-width: 850px; margin: 0 auto; }
         header { text-align: center; margin-bottom: 20px; }
-        .box { background: #121824; border: 1px solid #232D42; border-radius: 18px; padding: 22px; }
-        textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232D42; border-radius: 12px; padding: 14px; color: #fff; font-size: 14px; outline: none; margin-bottom: 12px; box-sizing: border-box; }
+        h1 { font-size: 26px; font-weight: 800; background: linear-gradient(135deg, #fff, #2AABEE); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232E42; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
         .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
-        .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
-        #st { display: none; text-align: center; color: #FFD233; margin-top: 14px; font-weight: 700; }
-        .res { margin-top: 20px; display: none; }
-        video { width: 100%; max-height: 520px; border-radius: 14px; background: #000; }
-        .dl { display: block; text-align: center; background: #2ED573; color: #000; text-decoration: none; padding: 15px; border-radius: 12px; font-weight: 800; margin-top: 12px; }
+        .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; transition: 0.2s; }
+        .btn-go:hover { transform: translateY(-2px); }
+        #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
+        .res { margin-top: 25px; display: none; }
+        video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
+        .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
+        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
+        .copy-btn:hover { background: rgba(255,255,255,0.2); }
+        .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
+        .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
+        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 6px; transition: 0.2s; }
+        .soc-link:hover { transform: translateY(-2px); filter: brightness(1.1); }
+        .btn-dl { background: var(--green); color: #000; }
+        .btn-tt { background: #000; color: #fff; border: 1px solid #333; }
+        .btn-yt { background: #FF0000; color: #fff; }
+        .btn-ig { background: linear-gradient(45deg, #F58529, #DD2A7B, #8134AF); color: #fff; }
+        .btn-fb { background: #1877F2; color: #fff; }
+        .btn-th { background: #101010; color: #fff; border: 1px solid #333; }
     </style>
 </head>
 <body>
     <div class="wrap">
         <header>
-            <h1>🎬 Генератор відео TikTok (Canvas Blur)</h1>
-            <p style="color:#8E9BAE; font-size:13px;">Без чорних смуг, з розмитим фоном на весь екран та чистими субтитрами</p>
+            <h1>⚡ Студія вірусних новин TikTok / Shorts</h1>
+            <p style="color:#8E9BAE; font-size:14px; margin-top:4px;">Монтаж у форматі рекомендацій + розумні хештеги та пряме вивантаження</p>
         </header>
 
         <div class="box">
-            <textarea id="pTxt" placeholder="Вставте текст новини..."></textarea>
+            <textarea id="pTxt" placeholder="Вставте сюди пост новини з вашого Telegram-каналу..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додайте фото новини (воно автоматично розмиється на весь екран без смуг)
+                📷 Додати фото або відео новини (зробить розмитий фон 9:16)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
-                <div id="mTxt" style="color:#2AABEE; font-weight:bold; margin-top:5px;"></div>
+                <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати ролик</button>
-            <div id="st">⏳ Монтаж: розмиття фону на 9:16, озвучка та субтитри...</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
+            <div id="st">⏳ Створення кінематографічного розмиття фону, озвучка та прорахунок хештегів...</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
-                <a id="dlBtn" class="dl" download>⬇ Завантажити готовий MP4</a>
+
+                <!-- Блок індивідуального SEO під рекомендації -->
+                <div class="seo-box">
+                    <div class="seo-title">
+                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
+                        <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
+                    </div>
+                    <div class="seo-text" id="seoContent"></div>
+                </div>
+
+                <!-- Кнопки швидкого вивантаження -->
+                <div class="social-title">🚀 Завантажити та відвантажити в соцмережі:</div>
+                <div class="social-grid">
+                    <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
+                    <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
+                    <a href="https://studio.youtube.com/channel/UC/videos/shortsvanity" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
+                    <a href="https://www.instagram.com/" target="_blank" class="soc-link btn-ig">📸 Reels</a>
+                    <a href="https://www.facebook.com/reels/create" target="_blank" class="soc-link btn-fb">📘 Facebook</a>
+                    <a href="https://www.threads.net/" target="_blank" class="soc-link btn-th">🧵 Threads</a>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
+        let currentSeoText = '';
         function showF(i) {
             if(i.files && i.files[0]) document.getElementById('mTxt').innerText = '✓ Обрано: ' + i.files[0].name;
         }
@@ -267,6 +333,8 @@ async def home():
                 if(d.video_url) {
                     vid.src = d.video_url;
                     document.getElementById('dlBtn').href = d.video_url;
+                    currentSeoText = d.seo_description;
+                    document.getElementById('seoContent').innerText = d.seo_description;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -276,6 +344,10 @@ async def home():
                 btn.disabled = false;
                 st.style.display = 'none';
             }
+        }
+        function copySeo() {
+            navigator.clipboard.writeText(currentSeoText);
+            alert("✓ Опис і хештеги скопійовано! Тепер переходьте у соцмережу та вставляйте.");
         }
     </script>
 </body>
@@ -307,7 +379,10 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
             try: p.unlink()
             except Exception: pass
 
-    return {"video_url": f"/videos/{out_file.name}"}
+    return {
+        "video_url": f"/videos/{out_file.name}",
+        "seo_description": parsed["seo_description"]
+    }
 
 @app.get("/videos/{filename}")
 async def get_vid(filename: str):
