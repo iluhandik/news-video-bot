@@ -16,7 +16,7 @@ class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
     CHANNEL_USERNAME = "@news_ukraine365"
     VOICE_NAME = "uk-UA-OstapNeural"
-    VOICE_RATE = "+14%"
+    VOICE_RATE = "+10%"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
     VIDEO_FPS = 30
@@ -27,7 +27,7 @@ class Config:
 Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-def clean_text_for_tts(text: str) -> str:
+def clean_for_tts(text: str) -> str:
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"t\.me/\S+", "", text)
     text = re.sub(r"@[a-zA-Z0-9_]+", "", text)
@@ -40,60 +40,49 @@ def clean_text_for_tts(text: str) -> str:
     )
     text = emoji_pattern.sub(" ", text)
     text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"']", " ", text)
+    
+    # Виправляємо дефіси у словах на зразок 24-річний -> 24 річний
+    text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
+    
+    # Прибираємо подвійні крапки та сміття
+    text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
-def generate_seo_metadata(headline: str, body: str) -> Dict[str, str]:
-    """Генерує вірусний опис та хештеги індивідуально під зміст новини для залітання в рекомендації"""
-    full_text_lower = (headline + " " + body).lower()
-    
-    # Визначення тематики та цільових тегів
-    topic_tags = []
-    if any(k in full_text_lower for k in ["дорог", "авто", "тариф", "проїзд", "водій", "штраф"]):
-        topic_tags = ["#платнідороги", "#водіїукраїни", "#автоукраїна", "#дорогиукраїни", "#тарифи"]
-        question = "Що думаєте про такі тарифи? Пишіть у коментарях 👇"
-    elif any(k in full_text_lower for k in ["трамп", "сша", "байден", "переговори", "вибори"]):
-        topic_tags = ["#трамп", "#сша", "#новинисвіту", "#геополітика", "#політика"]
-        question = "Як ви ставитеся до такої заяви? Діліться думками 👇"
-    elif any(k in full_text_lower for k in ["пенсі", "виплат", "зарплат", "грош", "банк", "курс"]):
-        topic_tags = ["#виплати", "#пенсії", "#грошіукраїна", "#фінанси", "#соціалка"]
-        question = "Чи вистачає цих коштів зараз? Ваша думка в коментарях 👇"
-    elif any(k in full_text_lower for k in ["рада", "закон", "депутат", "уряд", "зеленськ"]):
-        topic_tags = ["#верховнарада", "#закониукраїни", "#політикаукраїни", "#слуганароду"]
-        question = "Підтримуєте таке рішення депутатів? 👇"
-    else:
-        topic_tags = ["#резонанс", "#терміново", "#важливознати"]
-        question = "Що ви думаєте з цього приводу? Обговорюємо в коментарях 👇"
-
-    base_tags = ["#новиниукраїни", "#новини", "#українасьогодні", "#рек", "#рекомендації", "#тренди"]
-    all_hashtags = " ".join(topic_tags + base_tags)
-
-    description = f"{headline}! {question}\n\nПовні подробиці та першоджерело дивіться за посиланням у шапці профілю!\n\n{all_hashtags}"
-    
-    return {
-        "description": description,
-        "hashtags": all_hashtags
-    }
+def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
+    words = text.split()
+    lines = []
+    cur = []
+    dummy = Image.new("RGBA", (1, 1))
+    d = ImageDraw.Draw(dummy)
+    for w in words:
+        test = " ".join(cur + [w])
+        if d.textlength(test, font=font) <= max_w:
+            cur.append(w)
+        else:
+            if cur: lines.append(" ".join(cur))
+            cur = [w]
+    if cur: lines.append(" ".join(cur))
+    return lines
 
 def parse_post(raw_post: str) -> Dict[str, str]:
+    clean = clean_for_tts(raw_post)
     lines = [l.strip() for l in raw_post.split("\n") if len(l.strip()) > 3]
+    
     if lines:
-        headline = clean_text_for_tts(lines[0])[:50].upper()
-        body = clean_text_for_tts(" ".join(lines[1:])) if len(lines) > 1 else clean_text_for_tts(lines[0])
+        headline = clean_for_tts(lines[0])
+        body_text = clean_for_tts(" ".join(lines[1:])) if len(lines) > 1 else clean_for_tts(lines[0])
     else:
         headline = "ТЕРМІНОВА НОВИНА"
-        body = clean_text_for_tts(raw_post)
+        body_text = clean
 
-    cta = "Повні деталі дивіться в нашому Телеграм каналі. Посилання в шапці профілю!"
-    voice = f"{headline}. {body}. {cta}"
-
-    seo = generate_seo_metadata(headline, body)
+    # Природна плавна кінцівка без обривів
+    cta = "Повні деталі дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
+    voice = f"{headline}. {body_text}. {cta}"
 
     return {
-        "headline": headline,
-        "body": body[:200],
-        "voiceover": clean_text_for_tts(voice),
-        "seo_description": seo["description"],
-        "seo_hashtags": seo["hashtags"]
+        "headline": headline.upper(),
+        "body": body_text,
+        "voiceover": clean_for_tts(voice)
     }
 
 class TTSEngine:
@@ -106,7 +95,7 @@ class TTSEngine:
             pass
 
         if not out_p.exists() or out_p.stat().st_size < 100:
-            dur = max(8.0, min(24.0, len(text) / 14.0))
+            dur = max(8.0, min(25.0, len(text) / 14.0))
             cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:beep_factor=4:duration={dur}", "-filter:a", "volume=0.2", str(out_p)]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -132,18 +121,19 @@ class VideoEngine:
     def __init__(self):
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         self.font_path = str(font_p)
-        self.font_head = ImageFont.truetype(self.font_path, 40)
-        self.font_sub = ImageFont.truetype(self.font_path, 24)
+        self.font_badge = ImageFont.truetype(self.font_path, 26)
+        self.font_head = ImageFont.truetype(self.font_path, 38)
         self.font_cta = ImageFont.truetype(self.font_path, 30)
+        self.font_cta_sub = ImageFont.truetype(self.font_path, 22)
 
     def _render_sub(self, text: str) -> Image.Image:
-        w, h = 1000, 200
+        w, h = 1020, 220
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype(self.font_path, 68)
         up = text.upper()
         tw = draw.textlength(up, font=font)
-        tx = max(10, (w - tw) // 2)
+        tx = max(15, (w - tw) // 2)
         ty = (h - 68) // 2
 
         # Чорний контур
@@ -151,6 +141,7 @@ class VideoEngine:
             for dy in range(-6, 7):
                 if dx*dx + dy*dy <= 36:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
+        # Жовте виділення
         draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
@@ -158,59 +149,79 @@ class VideoEngine:
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # 1. Розмитий фон Canvas Blur 9:16
+        # 1. Розмитий Canvas Blur фон 9:16
         if user_img_path and user_img_path.exists():
-            orig_img = Image.open(user_img_path).convert("RGB")
-            bg_blurred = orig_img.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.GaussianBlur(35))
+            orig = Image.open(user_img_path).convert("RGB")
+            bg_blur = orig.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.GaussianBlur(38))
             dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 140))
-            bg_blurred.paste(dim, (0, 0), dim)
+            bg_blur.paste(dim, (0, 0), dim)
 
-            ow, oh = orig_img.size
+            # Чітке центральне зображення
+            ow, oh = orig.size
             nw = 1000
             nh = int(oh * (nw / ow))
-            sharp_img = orig_img.resize((nw, nh))
-
-            sharp_y = (Config.VIDEO_HEIGHT - nh) // 2 - 80
-            bg_blurred.paste(sharp_img, ((Config.VIDEO_WIDTH - nw) // 2, sharp_y))
-            final_bg = bg_blurred
+            sharp_img = orig.resize((nw, nh))
+            sharp_y = (Config.VIDEO_HEIGHT - nh) // 2 - 60
         else:
-            final_bg = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (15, 20, 30))
+            bg_blur = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (14, 18, 26))
+            sharp_img = None
+            sharp_y = 600
 
-        # 2. Верхній заголовок
-        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 350), (0, 0, 0, 0))
+        # 2. Верхній заголовок (з авто-переносом рядків)
+        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 420), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        t_draw.rounded_rectangle([40, 110, 340, 175], radius=12, fill=(225, 25, 35, 255))
-        t_draw.text((60, 122), "ТЕРМІНОВО", font=self.font_sub, fill=(255, 255, 255, 255))
-        t_draw.text((40, 205), parsed["headline"], font=self.font_head, fill=(255, 255, 255, 255))
-        t_draw.line([(40, 290), (Config.VIDEO_WIDTH - 40, 290)], fill=(255, 215, 0, 200), width=3)
+        
+        # Червоний бейдж «ТЕРМІНОВО»
+        t_draw.rounded_rectangle([40, 100, 320, 160], radius=12, fill=(225, 25, 35, 255))
+        t_draw.text((55, 112), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+
+        # Заголовок новини на 1-2 рядки без обрізань
+        head_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
+        cur_hy = 185
+        for hl in head_lines[:2]:
+            t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
+            cur_hy += 48
+        t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 220), width=3)
 
         # 3. Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
-        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 240), outline=(42, 171, 238, 255), width=2)
-        cta_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
-        tw = c_draw.textlength(cta_txt, font=self.font_cta)
-        c_draw.text(((Config.VIDEO_WIDTH - tw)//2, 42), cta_txt, font=self.font_cta, fill=(255, 255, 255, 255))
-        sub_c = Config.CHANNEL_DISPLAY_NAME
-        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(sub_c, font=self.font_sub))//2, 88), sub_c, font=self.font_sub, fill=(42, 171, 238, 255))
+        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 24, 36, 245), outline=(42, 171, 238, 255), width=2)
+        c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
+        cw = c_draw.textlength(c_txt, font=self.font_cta)
+        c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
+        c_sub = Config.CHANNEL_DISPLAY_NAME
+        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(c_sub, font=self.font_cta_sub))//2, 88), c_sub, font=self.font_cta_sub, fill=(42, 171, 238, 255))
 
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            zoom = 1.0 + 0.02 * (t / max(1.0, duration))
+            # Кінематографічний плавний Slow Zoom фону
+            zoom = 1.0 + 0.03 * (t / max(1.0, duration))
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
-            z_img = final_bg.resize((zw, zh))
-            frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+            z_bg = bg_blur.resize((zw, zh))
+            frame = z_bg.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
+            # Вставляємо чітке фото по центру з легким рухом
+            if sharp_img:
+                szw = int(sharp_img.width * zoom)
+                szh = int(sharp_img.height * zoom)
+                z_sharp = sharp_img.resize((szw, szh))
+                crop_sharp = z_sharp.crop(((szw - 1000)//2, (szh - sharp_img.height)//2, (szw + 1000)//2, (szh + sharp_img.height)//2))
+                frame.paste(crop_sharp, ((Config.VIDEO_WIDTH - 1000)//2, sharp_y))
+
+            # Верхня плашка заголовка
             frame.alpha_composite(top_bar, (0, 0))
 
+            # Динамічні субтитри під фото
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
                     if s:
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1150))
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, sharp_y + (sharp_img.height if sharp_img else 500) + 30))
                     break
 
+            # Нижня плашка в безпечній зоні
             frame.alpha_composite(cta_bar, (0, 1420))
             return np.array(frame.convert("RGB"))
 
@@ -220,7 +231,7 @@ class VideoEngine:
         clip.close()
         return out_file
 
-app = FastAPI(title="Viral News Studio Pro")
+app = FastAPI(title="Viral News Studio")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -229,7 +240,7 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral News Studio</title>
+    <title>News Studio Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
@@ -237,79 +248,54 @@ async def home():
         body { background: var(--bg); color: #fff; min-height: 100vh; padding: 25px 15px; }
         .wrap { max-width: 850px; margin: 0 auto; }
         header { text-align: center; margin-bottom: 20px; }
-        h1 { font-size: 26px; font-weight: 800; background: linear-gradient(135deg, #fff, #2AABEE); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+        h1 { font-size: 26px; font-weight: 800; }
+        .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; }
         textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232E42; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
         .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
-        .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; transition: 0.2s; }
-        .btn-go:hover { transform: translateY(-2px); }
+        .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
         .res { margin-top: 25px; display: none; }
         video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
-        .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
-        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
-        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
-        .copy-btn:hover { background: rgba(255,255,255,0.2); }
-        .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
-        .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
-        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
-        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; gap: 6px; transition: 0.2s; }
-        .soc-link:hover { transform: translateY(-2px); filter: brightness(1.1); }
+        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 15px; }
+        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; }
         .btn-dl { background: var(--green); color: #000; }
         .btn-tt { background: #000; color: #fff; border: 1px solid #333; }
         .btn-yt { background: #FF0000; color: #fff; }
         .btn-ig { background: linear-gradient(45deg, #F58529, #DD2A7B, #8134AF); color: #fff; }
-        .btn-fb { background: #1877F2; color: #fff; }
-        .btn-th { background: #101010; color: #fff; border: 1px solid #333; }
     </style>
 </head>
 <body>
     <div class="wrap">
         <header>
-            <h1>⚡ Студія вірусних новин TikTok / Shorts</h1>
-            <p style="color:#8E9BAE; font-size:14px; margin-top:4px;">Монтаж у форматі рекомендацій + розумні хештеги та пряме вивантаження</p>
+            <h1>🎬 Студія вірусних новин (TikTok / Shorts)</h1>
+            <p style="color:#8E9BAE; font-size:14px;">Без зрізання слів, з кінематографічним наближенням фото та чистим звуком</p>
         </header>
 
         <div class="box">
-            <textarea id="pTxt" placeholder="Вставте сюди пост новини з вашого Telegram-каналу..."></textarea>
+            <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати фото або відео новини (зробить розмитий фон 9:16)
+                📷 Додати фото з посту (наприклад, фото стрільця)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Створення кінематографічного розмиття фону, озвучка та прорахунок хештегів...</div>
+            <div id="st">⏳ Монтаж: перенос заголовка, плавне наближення кадру та озвучка...</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
-
-                <!-- Блок індивідуального SEO під рекомендації -->
-                <div class="seo-box">
-                    <div class="seo-title">
-                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
-                        <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
-                    </div>
-                    <div class="seo-text" id="seoContent"></div>
-                </div>
-
-                <!-- Кнопки швидкого вивантаження -->
-                <div class="social-title">🚀 Завантажити та відвантажити в соцмережі:</div>
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
                     <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
                     <a href="https://studio.youtube.com/channel/UC/videos/shortsvanity" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
                     <a href="https://www.instagram.com/" target="_blank" class="soc-link btn-ig">📸 Reels</a>
-                    <a href="https://www.facebook.com/reels/create" target="_blank" class="soc-link btn-fb">📘 Facebook</a>
-                    <a href="https://www.threads.net/" target="_blank" class="soc-link btn-th">🧵 Threads</a>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentSeoText = '';
         function showF(i) {
             if(i.files && i.files[0]) document.getElementById('mTxt').innerText = '✓ Обрано: ' + i.files[0].name;
         }
@@ -333,8 +319,6 @@ async def home():
                 if(d.video_url) {
                     vid.src = d.video_url;
                     document.getElementById('dlBtn').href = d.video_url;
-                    currentSeoText = d.seo_description;
-                    document.getElementById('seoContent').innerText = d.seo_description;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -345,10 +329,6 @@ async def home():
                 st.style.display = 'none';
             }
         }
-        function copySeo() {
-            navigator.clipboard.writeText(currentSeoText);
-            alert("✓ Опис і хештеги скопійовано! Тепер переходьте у соцмережу та вставляйте.");
-        }
     </script>
 </body>
 </html>"""
@@ -356,7 +336,7 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadFile] = File(None)):
     if not text or not text.strip():
-        text = "УВАГА: В Україні готують закон про платні дороги. Ставки затвердять до кінця 2027 року."
+        text = "ЧОЛОВІК, ЯКИЙ ВЧИНИВ СМЕРТЕЛЬНУ СТРІЛЯНИНУ В ЦЕНТРІ. 24 річний нападник вбив 6 людей."
 
     parsed = parse_post(text)
 
@@ -379,10 +359,7 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
             try: p.unlink()
             except Exception: pass
 
-    return {
-        "video_url": f"/videos/{out_file.name}",
-        "seo_description": parsed["seo_description"]
-    }
+    return {"video_url": f"/videos/{out_file.name}"}
 
 @app.get("/videos/{filename}")
 async def get_vid(filename: str):
