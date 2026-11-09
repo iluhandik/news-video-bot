@@ -46,26 +46,33 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
-def generate_flux_image(news_text: str, out_p: Path) -> bool:
-    """Генерація якісного репортажного фото через передову нейромережу FLUX.1 без водяних знаків"""
+def generate_safe_news_image(text: str, out_p: Path) -> bool:
+    """Генерує безпечне репортажне фото без слів-тригерів та водяних знаків"""
     try:
-        clean = clean_for_tts(news_text)[:120]
-        # Професійний промпт для репортажної зйомки Reuters / AP News
-        prompt = (
-            f"authentic editorial documentary photojournalism, realistic breaking news photo, "
-            f"35mm photography, natural lighting, high detail, {clean}, candid, award winning press photography"
-        )
-        enc = urllib.parse.quote(prompt)
-        # Виклик моделі FLUX з відключеним логотипом
-        url = f"https://image.pollinations.ai/prompt/{enc}?model=flux&width=1080&height=1920&nologo=true&seed={random.randint(1000, 99999)}"
+        t_low = text.lower()
+        # Визначаємо тему та підбираємо безпечний журналістський промпт
+        if any(w in t_low for w in ["школ", "учен", "клас", "діт"]):
+            topic = "exterior of modern high school building, police car outside with flashing lights, rainy street, documentary photography, 35mm"
+        elif any(w in t_low for w in ["суд", "штраф", "закон", "рада"]):
+            topic = "courthouse building exterior, columns, gavel on desk, dramatic cinematic lighting, press photo"
+        elif any(w in t_low for w in ["дорог", "авто", "тариф"]):
+            topic = "highway with cars, toll road, evening traffic, cinematic moody photography"
+        elif any(w in t_low for w in ["трамп", "сша", "байден"]):
+            topic = "white house exterior at dusk, american flag, press conference microphones, cinematic"
+        else:
+            topic = "breaking news scene, police cordon, city street, dramatic evening light, photojournalism"
+
+        enc = urllib.parse.quote(topic)
+        # Використовуємо надійний генератор із високою швидкістю
+        url = f"https://image.pollinations.ai/prompt/{enc}?width=1080&height=1920&nologo=true&seed={int(time.time())}"
         
-        r = requests.get(url, timeout=40)
-        if r.status_code == 200 and len(r.content) > 20000:
+        r = requests.get(url, timeout=20)
+        if r.status_code == 200 and len(r.content) > 15000:
             with open(out_p, "wb") as f:
                 f.write(r.content)
             return True
     except Exception as e:
-        print(f"[FLUX Gen Error] {e}")
+        print(f"[Image Gen Error] {e}")
     return False
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
@@ -101,7 +108,6 @@ def parse_post(raw_post: str) -> Dict[str, str]:
     return {
         "headline": headline.upper(),
         "body": body_text,
-        "raw": raw_post,
         "voiceover": clean_for_tts(voice)
     }
 
@@ -172,39 +178,42 @@ class VideoEngine:
             for dy in range(-5, 6):
                 if dx*dx + dy*dy <= 25:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        draw.text((tx, ty), up, font=font, fill=(255, 225, 20, 255))
+        draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
     def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, user_img_path: Optional[Path] = None):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # Завантажуємо зображення (фото від користувача або нейромережі FLUX)
+        # 1. Завантаження або створення якісного фону
         if user_img_path and user_img_path.exists():
             orig = Image.open(user_img_path).convert("RGB")
-            # Підганяємо під 1080x1920
-            ow, oh = orig.size
-            tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
-            if ow / oh > tr:
-                nw = int(oh * tr)
-                crop_box = ((ow - nw) // 2, 0, (ow + nw) // 2, oh)
-            else:
-                nh = int(ow / tr)
-                crop_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
-            bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
-            # Затемнення для читабельності субтитрів
-            dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 110))
-            bg_base.paste(dim, (0, 0), dim)
         else:
-            bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (14, 18, 28))
+            # Преміальний новинний фон замість чорноти
+            orig = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
+            d_t = ImageDraw.Draw(orig)
+            d_t.ellipse([100, 400, 980, 1500], fill=(28, 42, 65))
 
-        # 1. Верхній заголовок «ТЕРМІНОВО»
+        ow, oh = orig.size
+        tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+        if ow / oh > tr:
+            nw = int(oh * tr)
+            crop_box = ((ow - nw) // 2, 0, (ow + nw) // 2, oh)
+        else:
+            nh = int(ow / tr)
+            crop_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
+        bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+        
+        # Затемнення для контрасту тексту
+        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
+        bg_base.paste(dim, (0, 0), dim)
+
+        # 2. Верхній заголовок
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 400), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         t_draw.rounded_rectangle([40, 90, 280, 150], radius=12, fill=(225, 25, 35, 255))
         t_draw.text((55, 102), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Вотермарка праворуч
         wm = Config.CHANNEL_DISPLAY_NAME
         wm_w = int(t_draw.textlength(wm, font=self.font_badge))
         t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 90, Config.VIDEO_WIDTH - 40, 150], radius=12, fill=(20, 30, 45, 220), outline=(50, 75, 110, 255), width=1)
@@ -217,7 +226,7 @@ class VideoEngine:
             cur_hy += 46
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 220), width=3)
 
-        # 2. Нижня плашка CTA
+        # 3. Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -229,13 +238,12 @@ class VideoEngine:
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # Кінематографічний повільний зум кадру на весь екран (Ken Burns)
+            # Кінематографічний зум на повний екран
             zoom = 1.0 + 0.04 * (t / max(1.0, duration))
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
             z_img = bg_base.resize((zw, zh))
             frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
-            # Верхня плашка
             frame.alpha_composite(top_bar, (0, 0))
 
             # Субтитри по центру
@@ -246,7 +254,6 @@ class VideoEngine:
                         frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1100))
                     break
 
-            # Нижня плашка в безпечній зоні
             frame.alpha_composite(cta_bar, (0, 1420))
             return np.array(frame.convert("RGB"))
 
@@ -292,21 +299,21 @@ async def home():
 <body>
     <div class="wrap">
         <header>
-            <h1>🎬 Студія новин NEWS УКРАЇНА 365 (FLUX AI)</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Генерація репортажного кадру через FLUX.1 + чистий дикторський голос</p>
+            <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
+            <p style="color:#8E9BAE; font-size:14px;">Автоматична генерація репортажного кадру та живий звук</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати своє фото з новини (якщо не додасте — FLUX згенерує кадр сам)
+                📷 Додати своє фото з новини (якщо немає — ШІ згенерує кадр автоматично)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
-            <div id="st">⏳ Генерація фото через нейромережу FLUX, озвучка та кіномонтаж... (35-45 сек)</div>
+            <div id="st">⏳ Генерація тематичного кадру та монтаж... (25-35 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -379,10 +386,10 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
         with open(media_p, "wb") as f:
             f.write(await media.read())
     else:
-        # Автоматична якісна генерація через FLUX
-        flux_img = Config.TEMP_DIR / f"flux_{int(time.time())}.jpg"
-        if generate_flux_image(parsed["headline"] + " " + parsed["body"], flux_img):
-            media_p = flux_img
+        # Автоматична генерація безпечного репортажного кадру
+        ai_img = Config.TEMP_DIR / f"ai_{int(time.time())}.jpg"
+        if generate_safe_news_image(parsed["headline"] + " " + parsed["body"], ai_img):
+            media_p = ai_img
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio)
