@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import requests
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from moviepy import VideoClip, AudioFileClip
+from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
@@ -206,49 +206,58 @@ class VideoEngine:
         draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
-    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, user_img_path: Optional[Path] = None):
+    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_path: Optional[Path] = None):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # Підготовка зображення 9:16
-        if user_img_path and user_img_path.exists():
-            orig = Image.open(user_img_path).convert("RGB")
-            # Обрізаємо нижні 50px картинки, щоб гарантовано видалити сторонній логотип
-            ow, oh = orig.size
-            if oh > 100:
-                orig = orig.crop((0, 0, ow, oh - 60))
-        else:
-            orig = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
+        is_video_media = False
+        user_video_clip = None
+        sharp_img = None
+        bg_base = None
 
-        ow, oh = orig.size
-        tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
-        if ow / oh > tr:
-            nw = int(oh * tr)
-            crop_box = ((ow - nw) // 2, 0, (ow + nw) // 2, oh)
+        if media_path and media_path.exists():
+            ext = media_path.suffix.lower()
+            if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"]:
+                try:
+                    user_video_clip = VideoFileClip(str(media_path)).resized(width=1000)
+                    is_video_media = True
+                except Exception:
+                    is_video_media = False
+            
+            if not is_video_media:
+                try:
+                    orig = Image.open(media_path).convert("RGB")
+                    ow, oh = orig.size
+                    if oh > 100:
+                        orig = orig.crop((0, 0, ow, oh - 60))
+                    
+                    tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+                    if ow / oh > tr:
+                        nw = int(oh * tr)
+                        crop_box = ((ow - nw) // 2, 0, (ow + nw) // 2, oh)
+                    else:
+                        nh = int(ow / tr)
+                        crop_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
+                    bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
+                    bg_base.paste(dim, (0, 0), dim)
+                except Exception:
+                    bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
         else:
-            nh = int(ow / tr)
-            crop_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
-        bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
-        
-        # Легке затемнення
-        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
-        bg_base.paste(dim, (0, 0), dim)
+            bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
 
-        # 1. Верхній блок новини (ОПУЩЕНИЙ НА РІВЕНЬ Y = 260px - БЕЗПЕЧНА ЗОНА ТІКТОКУ)
+        # Верхній блок новини в безпечній зоні
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         
-        # Червоний бейдж «ТЕРМІНОВО»
         t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
         t_draw.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Велика яскрава вотермарка каналу праворуч
         wm = Config.CHANNEL_DISPLAY_NAME
         wm_w = int(t_draw.textlength(wm, font=self.font_watermark))
         t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
         t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
-        # Заголовок новини
         h_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
         cur_hy = 345
         for hl in h_lines[:2]:
@@ -256,7 +265,7 @@ class VideoEngine:
             cur_hy += 48
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # 2. Нижня плашка CTA (піднята до Y = 1380, щоб не накладатися на опис TikTok)
+        # Нижня плашка CTA в безпечній зоні
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -268,14 +277,27 @@ class VideoEngine:
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            zoom = 1.0 + 0.04 * (t / max(1.0, duration))
-            zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
-            z_img = bg_base.resize((zw, zh))
-            frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+            if is_video_media and user_video_clip:
+                sub_t = t % user_video_clip.duration
+                raw_frame = user_video_clip.get_frame(sub_t)
+                v_img = Image.fromarray(raw_frame)
+                
+                # Розмиття фону на базі поточного кадру відео
+                bg_v = v_img.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.BoxBlur(12))
+                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 140))
+                bg_v.paste(dim, (0, 0), dim)
+                frame = bg_v.convert("RGBA")
+
+                # Чітке відео по центру
+                frame.paste(v_img, ((Config.VIDEO_WIDTH - v_img.width)//2, 540))
+            else:
+                zoom = 1.0 + 0.04 * (t / max(1.0, duration))
+                zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
+                z_img = bg_base.resize((zw, zh))
+                frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
             frame.alpha_composite(top_bar, (0, 0))
 
-            # Субтитри по центру
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
@@ -283,7 +305,6 @@ class VideoEngine:
                         frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1080))
                     break
 
-            # Нижня плашка
             frame.alpha_composite(cta_bar, (0, 1360))
             return np.array(frame.convert("RGB"))
 
@@ -291,6 +312,8 @@ class VideoEngine:
         clip.write_videofile(str(out_file), fps=Config.VIDEO_FPS, codec="libx264", audio_codec="aac", preset="ultrafast", threads=2, logger=None)
         audio_clip.close()
         clip.close()
+        if user_video_clip:
+            user_video_clip.close()
         return out_file
 
 app = FastAPI(title="Viral News Studio Pro")
@@ -337,20 +360,20 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">100% сумісність із безпечними зонами TikTok та помітна вотермарка</p>
+            <p style="color:#8E9BAE; font-size:14px;">Підтримка живого відео та фото з посту + FLUX.1 генерація</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати своє фото з новини (якщо немає — нейромережа підбере автоматично)
-                <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
+                📹 <b>Додати ВІДЕО або ФОТО з новини</b> (підтримує mp4, mov, jpg, png)
+                <input type="file" id="mFile" accept="video/*,image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Монтаж у безпечних зонах TikTok та накладання вотермарки... (30-40 сек)</div>
+            <div id="st">⏳ Монтаж відео, озвучка та прорахунок хештегів... (30-45 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -367,7 +390,7 @@ async def home():
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
                     <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
-                   <a href="https://www.youtube.com/upload" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
+                    <a href="https://www.youtube.com/upload" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
                     <a href="https://www.instagram.com/" target="_blank" class="soc-link btn-ig">📸 Reels</a>
                     <a href="https://www.facebook.com/reels/create" target="_blank" class="soc-link btn-fb">📘 Facebook</a>
                     <a href="https://www.threads.net/" target="_blank" class="soc-link btn-th">🧵 Threads</a>
@@ -383,7 +406,7 @@ async def home():
         function showF(i) {
             if(i.files && i.files[0]) {
                 selectedFile = i.files[0];
-                document.getElementById('mTxt').innerText = '✓ Обрано фото: ' + selectedFile.name;
+                document.getElementById('mTxt').innerText = '✓ Обрано файл: ' + selectedFile.name;
             }
         }
         async function gen() {
@@ -439,7 +462,8 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
 
     media_p = None
     if media and media.filename:
-        media_p = Config.TEMP_DIR / f"img_{int(time.time())}_{media.filename}"
+        ext = Path(media.filename).suffix
+        media_p = Config.TEMP_DIR / f"media_{int(time.time())}{ext}"
         with open(media_p, "wb") as f:
             f.write(await media.read())
     else:
