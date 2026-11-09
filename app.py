@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import urllib.parse
 import subprocess
 from pathlib import Path
 from datetime import datetime
@@ -8,6 +9,7 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+import requests
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import VideoClip, AudioFileClip
@@ -15,8 +17,10 @@ from moviepy import VideoClip, AudioFileClip
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
     CHANNEL_USERNAME = "@news_ukraine365"
+    # Більш приємний, оксамитовий голос
     VOICE_NAME = "uk-UA-OstapNeural"
-    VOICE_RATE = "+10%"
+    VOICE_RATE = "+4%"
+    VOICE_PITCH = "-1Hz"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
     VIDEO_FPS = 25
@@ -43,6 +47,22 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
+
+def download_thematic_image(query: str, out_p: Path) -> bool:
+    """Генерує фотореалістичний кінематографічний кадр під конкретну новину"""
+    try:
+        clean_q = clean_for_tts(query)[:100]
+        prompt = f"cinematic dramatic breaking news photo, 8k resolution, authentic realistic, {clean_q}, hyperrealistic photography, dramatic lighting, detailed"
+        enc = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{enc}?width=1080&height=1350&nologo=true"
+        r = requests.get(url, timeout=18)
+        if r.status_code == 200 and len(r.content) > 15000:
+            with open(out_p, "wb") as f:
+                f.write(r.content)
+            return True
+    except Exception as e:
+        print(f"[Image Gen Error] {e}")
+    return False
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
     words = text.split()
@@ -77,6 +97,7 @@ def parse_post(raw_post: str) -> Dict[str, str]:
     return {
         "headline": headline.upper(),
         "body": body_text,
+        "raw": raw_post,
         "voiceover": clean_for_tts(voice)
     }
 
@@ -84,13 +105,20 @@ class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path):
         try:
-            cmd = ["edge-tts", "--voice", Config.VOICE_NAME, "--rate", Config.VOICE_RATE, "--text", text, "--write-media", str(out_p)]
+            cmd = [
+                "edge-tts",
+                "--voice", Config.VOICE_NAME,
+                "--rate", Config.VOICE_RATE,
+                "--pitch", Config.VOICE_PITCH,
+                "--text", text,
+                "--write-media", str(out_p)
+            ]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=25)
         except Exception:
             pass
 
         if not out_p.exists() or out_p.stat().st_size < 100:
-            dur = max(8.0, min(25.0, len(text) / 14.0))
+            dur = max(8.0, min(24.0, len(text) / 14.0))
             cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:beep_factor=4:duration={dur}", "-filter:a", "volume=0.2", str(out_p)]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -116,11 +144,49 @@ class VideoEngine:
     def __init__(self):
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
         self.font_path = str(font_p)
-        self.font_badge = ImageFont.truetype(self.font_path, 26)
+        self.font_badge = ImageFont.truetype(self.font_path, 24)
         self.font_head = ImageFont.truetype(self.font_path, 36)
-        self.font_cta = ImageFont.truetype(self.font_path, 30)
-        self.font_cta_sub = ImageFont.truetype(self.font_path, 22)
-        self.font_watermark = ImageFont.truetype(self.font_path, 24)
+        self.font_card_title = ImageFont.truetype(self.font_path, 32)
+        self.font_card_body = ImageFont.truetype(self.font_path, 26)
+        self.font_card_sub = ImageFont.truetype(self.font_path, 20)
+        self.font_cta = ImageFont.truetype(self.font_path, 28)
+
+    def _render_telegram_card(self, headline: str, body: str) -> Image.Image:
+        """Красива скляна картка посту з логотипом каналу та галочкою"""
+        w, h = 980, 480
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        # Скляний фон у стилі Telegram Dark
+        draw.rounded_rectangle([0, 0, w, h], radius=24, fill=(18, 26, 38, 235), outline=(50, 75, 110, 255), width=2)
+
+        # Аватар
+        draw.ellipse([34, 30, 102, 98], fill=(42, 171, 238, 255))
+        draw.polygon([(52, 68), (84, 50), (68, 82), (62, 72)], fill=(255, 255, 255, 255))
+
+        # Назва каналу + верифікація
+        draw.text((118, 32), Config.CHANNEL_DISPLAY_NAME, font=self.font_card_title, fill=(255, 255, 255, 255))
+        nw = int(draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=self.font_card_title))
+        draw.ellipse([118 + nw + 8, 38, 118 + nw + 30, 60], fill=(42, 171, 238, 255))
+        draw.text((118 + nw + 12, 38), "✓", font=self.font_card_sub, fill=(255, 255, 255, 255))
+        draw.text((118, 68), f"{Config.CHANNEL_USERNAME} • щойно", font=self.font_card_sub, fill=(130, 145, 165, 255))
+
+        draw.line([(34, 110), (w - 34, 110)], fill=(40, 55, 80, 200), width=1)
+
+        # Заголовок новини
+        draw.text((34, 130), headline[:44] + ("..." if len(headline) > 44 else ""), font=self.font_card_title, fill=(255, 225, 30, 255))
+
+        # Текст
+        lines = wrap_text_lines(body, self.font_card_body, w - 68)
+        cur_y = 185
+        for l in lines[:4]:
+            draw.text((34, cur_y), l, font=self.font_card_body, fill=(225, 230, 240, 255))
+            cur_y += 38
+
+        # Перегляди
+        draw.text((34, h - 42), "👁 148.5K", font=self.font_card_sub, fill=(120, 140, 165, 255))
+        draw.text((w - 220, h - 42), f"👉 Підписатися на канал", font=self.font_card_sub, fill=(42, 171, 238, 255))
+        return img
 
     def _render_sub(self, text: str) -> Image.Image:
         w, h = 1020, 220
@@ -128,7 +194,6 @@ class VideoEngine:
         draw = ImageDraw.Draw(img)
         up = text.upper()
 
-        # Автоматичний підбір розміру шрифту, щоб слово не обрізалося
         font_size = 64
         font = ImageFont.truetype(self.font_path, font_size)
         while draw.textlength(up, font=font) > (w - 60) and font_size > 36:
@@ -139,86 +204,89 @@ class VideoEngine:
         tx = max(20, (w - tw) // 2)
         ty = (h - font_size) // 2
 
-        # Чорний контур
+        # Товстий чорний контур
         for dx in range(-5, 6):
             for dy in range(-5, 6):
                 if dx*dx + dy*dy <= 25:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
+        draw.text((tx, ty), up, font=font, fill=(255, 225, 20, 255))
         return img
 
     def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, user_img_path: Optional[Path] = None):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # 1. Формування фону та центрального фото
+        # Завантажуємо зображення (або власне, або згенероване через ШІ)
         if user_img_path and user_img_path.exists():
-            try:
-                orig = Image.open(user_img_path).convert("RGB")
-                small = orig.resize((270, 480))
-                bg_blur = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR).filter(ImageFilter.BoxBlur(8))
-                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 160))
-                bg_blur.paste(dim, (0, 0), dim)
+            orig = Image.open(user_img_path).convert("RGB")
+            # Розмитий гарний фон на весь екран
+            small = orig.resize((270, 480))
+            bg_base = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR)
+            dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (8, 12, 20, 165))
+            bg_base.paste(dim, (0, 0), dim)
 
-                ow, oh = orig.size
-                nw = 1000
-                nh = int(oh * (nw / ow))
-                sharp_img = orig.resize((nw, nh))
-                sharp_y = (Config.VIDEO_HEIGHT - nh) // 2 - 40
-            except Exception:
-                bg_blur = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (15, 22, 35))
-                sharp_img = None
-                sharp_y = 600
+            # Чітке фото по центру
+            ow, oh = orig.size
+            nw = 980
+            nh = int(oh * (nw / ow))
+            sharp_img = orig.resize((nw, nh))
+            sharp_y = 480
         else:
-            bg_blur = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (15, 22, 35))
+            # Преміальний новинний градієнт
+            bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (14, 18, 28))
             sharp_img = None
-            sharp_y = 600
+            sharp_y = 480
 
-        # 2. Верхній заголовок (з авто-переносом рядків)
-        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 420), (0, 0, 0, 0))
+        # Верхній заголовок «ТЕРМІНОВО»
+        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 400), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        t_draw.rounded_rectangle([40, 95, 300, 155], radius=12, fill=(225, 25, 35, 255))
-        t_draw.text((55, 108), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+        t_draw.rounded_rectangle([40, 90, 280, 150], radius=12, fill=(225, 25, 35, 255))
+        t_draw.text((55, 102), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Фірмова вотермарка в правому кутку
-        wm_text = Config.CHANNEL_DISPLAY_NAME
-        wm_w = int(t_draw.textlength(wm_text, font=self.font_watermark))
-        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 95, Config.VIDEO_WIDTH - 40, 155], radius=12, fill=(20, 30, 45, 200), outline=(50, 70, 100, 255), width=1)
-        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 110), wm_text, font=self.font_watermark, fill=(255, 255, 255, 220))
+        # Вотермарка праворуч
+        wm = Config.CHANNEL_DISPLAY_NAME
+        wm_w = int(t_draw.textlength(wm, font=self.font_badge))
+        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 90, Config.VIDEO_WIDTH - 40, 150], radius=12, fill=(20, 30, 45, 210), outline=(50, 75, 110, 255), width=1)
+        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 104), wm, font=self.font_badge, fill=(255, 255, 255, 220))
 
-        head_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
+        h_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
         cur_hy = 175
-        for hl in head_lines[:2]:
+        for hl in h_lines[:2]:
             t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
             cur_hy += 46
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 220), width=3)
 
-        # 3. Нижня плашка CTA
+        # Картка Telegram
+        card_img = self._render_telegram_card(parsed["headline"], parsed["body"])
+
+        # Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
-        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 24, 36, 245), outline=(42, 171, 238, 255), width=2)
+        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
         c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
         cw = c_draw.textlength(c_txt, font=self.font_cta)
         c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
-        c_sub = Config.CHANNEL_DISPLAY_NAME
-        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(c_sub, font=self.font_cta_sub))//2, 88), c_sub, font=self.font_cta_sub, fill=(42, 171, 238, 255))
+        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=self.font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=self.font_badge, fill=(42, 171, 238, 255))
 
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            frame = bg_blur.copy().convert("RGBA")
+            frame = bg_base.copy().convert("RGBA")
 
+            # Якщо фото є — ставимо його, якщо немає — показуємо стильний пост Telegram
             if sharp_img:
-                frame.paste(sharp_img, ((Config.VIDEO_WIDTH - 1000)//2, sharp_y))
+                frame.paste(sharp_img, ((Config.VIDEO_WIDTH - sharp_img.width)//2, sharp_y))
+            else:
+                frame.alpha_composite(card_img, ((Config.VIDEO_WIDTH - card_img.width)//2, sharp_y))
 
             frame.alpha_composite(top_bar, (0, 0))
 
+            # Субтитри
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
                     if s:
-                        # Субтитри розташовані на комфортній висоті
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1180))
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1150))
                     break
 
             frame.alpha_composite(cta_bar, (0, 1420))
@@ -267,20 +335,20 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">З вотермаркою каналу, повними субтитрами та швидким рендерингом</p>
+            <p style="color:#8E9BAE; font-size:14px;">Автоматична ШІ-генерація фото, приємна озвучка та вотермарка</p>
         </header>
 
         <div class="box">
-            <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
+            <textarea id="pTxt" placeholder="Вставте сюди пост новини (заголовок та опис)..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати фото з посту (натисніть, щоб обрати)
+                📷 Додати фото або відео з новини (якщо немає — ШІ згенерує сам)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
-            <div id="st">⏳ Монтаж відео та накладання вотермарки... (20-30 сек)</div>
+            <div id="st">⏳ ШІ-підбір кадру, приємна озвучка та рендеринг... (25-35 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -320,7 +388,7 @@ async def home():
                 }
                 const res = await fetch('/api/generate', { method: 'POST', body: fd });
                 if (!res.ok) {
-                    throw new Error("Сервер повернув помилку (код " + res.status + ")");
+                    throw new Error("Помилка сервера (код " + res.status + ")");
                 }
                 const d = await res.json();
                 if(d.video_url) {
@@ -343,7 +411,7 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadFile] = File(None)):
     if not text or not text.strip():
-        text = "У ЛЬВОВІ ТРЕТЬОКЛАСНИКА ОШТРАФОВАНО ЗА ПОГРОЗИ ОДНОКЛАСНИКАМ. 9 річний учень погрожував ножем."
+        text = "У ЛЬВОВІ ТРЕТЬОКЛАСНИКА ОШТРАФОВАНО ЗА ПОГРОЗИ ОДНОКЛАСНИКАМ. 9-річний учень погрожував ножем."
 
     parsed = parse_post(text)
 
@@ -352,6 +420,11 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
         media_p = Config.TEMP_DIR / f"img_{int(time.time())}_{media.filename}"
         with open(media_p, "wb") as f:
             f.write(await media.read())
+    else:
+        # Автоматична ШІ-генерація кадру, якщо користувач не завантажив файл
+        auto_img = Config.TEMP_DIR / f"ai_{int(time.time())}.jpg"
+        if download_thematic_image(parsed["headline"] + " " + parsed["body"], auto_img):
+            media_p = auto_img
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio)
