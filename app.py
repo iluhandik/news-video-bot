@@ -46,34 +46,61 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
-def generate_safe_news_image(text: str, out_p: Path) -> bool:
-    """Генерує безпечне репортажне фото без слів-тригерів та водяних знаків"""
+def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
+    """Генерує фотореалістичний репортажний кадр через модель FLUX.1 з високою деталізацією"""
     try:
-        t_low = text.lower()
-        # Визначаємо тему та підбираємо безпечний журналістський промпт
-        if any(w in t_low for w in ["школ", "учен", "клас", "діт"]):
-            topic = "exterior of modern high school building, police car outside with flashing lights, rainy street, documentary photography, 35mm"
-        elif any(w in t_low for w in ["суд", "штраф", "закон", "рада"]):
-            topic = "courthouse building exterior, columns, gavel on desk, dramatic cinematic lighting, press photo"
-        elif any(w in t_low for w in ["дорог", "авто", "тариф"]):
-            topic = "highway with cars, toll road, evening traffic, cinematic moody photography"
-        elif any(w in t_low for w in ["трамп", "сша", "байден"]):
-            topic = "white house exterior at dusk, american flag, press conference microphones, cinematic"
+        t_low = news_text.lower()
+        if any(w in t_low for w in ["школ", "учен", "клас", "діт", "вчител"]):
+            scene = "hallway of modern school building, police officer talking with teachers, documentary press photography, natural light, 35mm"
+        elif any(w in t_low for w in ["суд", "штраф", "закон", "рада", "депутат"]):
+            scene = "courtroom interior, wooden judge bench, law gavel, official press photography, dramatic lighting"
+        elif any(w in t_low for w in ["дорог", "авто", "тариф", "траса", "водій"]):
+            scene = "modern highway toll gate station with cars, evening dusk, realistic editorial photography"
+        elif any(w in t_low for w in ["трамп", "сша", "байден", "президент"]):
+            scene = "press conference with microphones, american flags in background, documentary photojournalism"
+        elif any(w in t_low for w in ["поліц", "стрілян", "напад", "збро"]):
+            scene = "police cars with flashing emergency lights at dusk on city street, yellow caution tape, photojournalism"
         else:
-            topic = "breaking news scene, police cordon, city street, dramatic evening light, photojournalism"
+            scene = "breaking news scene, camera crew with microphones, police cordon in European city, documentary press photo"
 
-        enc = urllib.parse.quote(topic)
-        # Використовуємо надійний генератор із високою швидкістю
-        url = f"https://image.pollinations.ai/prompt/{enc}?width=1080&height=1920&nologo=true&seed={int(time.time())}"
+        prompt = f"authentic candid photojournalism, {scene}, shot on 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
+        enc = urllib.parse.quote(prompt)
+        # Виклик моделі FLUX
+        url = f"https://image.pollinations.ai/prompt/{enc}?model=flux&width=1080&height=1920&nologo=true&seed={int(time.time())}"
         
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=30)
         if r.status_code == 200 and len(r.content) > 15000:
             with open(out_p, "wb") as f:
                 f.write(r.content)
             return True
     except Exception as e:
-        print(f"[Image Gen Error] {e}")
+        print(f"[FLUX Error] {e}")
     return False
+
+def generate_seo(headline: str, body: str) -> Dict[str, str]:
+    """Розрахунок вірусного опису та хештегів під алгоритми рекомендацій"""
+    combined = (headline + " " + body).lower()
+    
+    if any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
+        tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція", "#резонанс"]
+        q = "Як вважаєте, 1700 грн штрафу для батьків — це достатнє покарання? Пишіть у коментарях 👇"
+    elif any(k in combined for k in ["дорог", "авто", "тариф", "проїзд", "водій"]):
+        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дороги", "#тарифи"]
+        q = "Чи готові ви платити такі гроші за проїзд новими трасами? 👇"
+    elif any(k in combined for k in ["трамп", "сша", "байден", "політик"]):
+        tags = ["#трамп", "#сша", "#новинисвіту", "#геополітика", "#політика"]
+        q = "Що думаєте про такі заяви? Діліться думками в коментарях 👇"
+    elif any(k in combined for k in ["рада", "закон", "депутат", "уряд"]):
+        tags = ["#верховнарада", "#закониукраїни", "#депутати", "#політика"]
+        q = "Підтримуєте ухвалення такого закону? Обговорюємо нижче 👇"
+    else:
+        tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
+        q = "Яка ваша думка щодо цієї ситуації? Пишіть у коментарях 👇"
+
+    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
+    all_tags = " ".join(tags + rec_tags)
+    desc = f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags}"
+    return {"desc": desc, "tags": all_tags}
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
     words = text.split()
@@ -104,11 +131,13 @@ def parse_post(raw_post: str) -> Dict[str, str]:
 
     cta = "Повні деталі дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
     voice = f"{headline}. {body_text}. {cta}"
+    seo_data = generate_seo(headline, body_text)
 
     return {
         "headline": headline.upper(),
         "body": body_text,
-        "voiceover": clean_for_tts(voice)
+        "voiceover": clean_for_tts(voice),
+        "seo_desc": seo_data["desc"]
     }
 
 class TTSEngine:
@@ -173,7 +202,7 @@ class VideoEngine:
         tx = max(20, (w - tw) // 2)
         ty = (h - font_size) // 2
 
-        # Чорний контур
+        # Чорний обвід для чіткості
         for dx in range(-5, 6):
             for dy in range(-5, 6):
                 if dx*dx + dy*dy <= 25:
@@ -185,14 +214,11 @@ class VideoEngine:
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # 1. Завантаження або створення якісного фону
+        # Підготовка зображення на весь екран 9:16
         if user_img_path and user_img_path.exists():
             orig = Image.open(user_img_path).convert("RGB")
         else:
-            # Преміальний новинний фон замість чорноти
             orig = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
-            d_t = ImageDraw.Draw(orig)
-            d_t.ellipse([100, 400, 980, 1500], fill=(28, 42, 65))
 
         ow, oh = orig.size
         tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
@@ -204,16 +230,17 @@ class VideoEngine:
             crop_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
         bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
         
-        # Затемнення для контрасту тексту
-        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
+        # Легке затемнення
+        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 115))
         bg_base.paste(dim, (0, 0), dim)
 
-        # 2. Верхній заголовок
+        # 1. Верхній блок «ТЕРМІНОВО»
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 400), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         t_draw.rounded_rectangle([40, 90, 280, 150], radius=12, fill=(225, 25, 35, 255))
         t_draw.text((55, 102), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
+        # Вотермарка праворуч
         wm = Config.CHANNEL_DISPLAY_NAME
         wm_w = int(t_draw.textlength(wm, font=self.font_badge))
         t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 90, Config.VIDEO_WIDTH - 40, 150], radius=12, fill=(20, 30, 45, 220), outline=(50, 75, 110, 255), width=1)
@@ -226,7 +253,7 @@ class VideoEngine:
             cur_hy += 46
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 220), width=3)
 
-        # 3. Нижня плашка CTA
+        # 2. Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -238,7 +265,7 @@ class VideoEngine:
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # Кінематографічний зум на повний екран
+            # Кінематографічне повільне наближення
             zoom = 1.0 + 0.04 * (t / max(1.0, duration))
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
             z_img = bg_base.resize((zw, zh))
@@ -263,7 +290,7 @@ class VideoEngine:
         clip.close()
         return out_file
 
-app = FastAPI(title="Viral News Studio")
+app = FastAPI(title="Viral News Studio Pro")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -272,7 +299,7 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News Studio FLUX</title>
+    <title>News Studio FLUX Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
@@ -281,47 +308,68 @@ async def home():
         .wrap { max-width: 850px; margin: 0 auto; }
         header { text-align: center; margin-bottom: 20px; }
         h1 { font-size: 26px; font-weight: 800; }
-        .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; }
+        .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
         textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232E42; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
         .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
         .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
         .res { margin-top: 25px; display: none; }
         video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
-        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 15px; }
-        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+        .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
+        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
+        .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
+        .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
+        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
         .btn-dl { background: var(--green); color: #000; }
         .btn-tt { background: #000; color: #fff; border: 1px solid #333; }
         .btn-yt { background: #FF0000; color: #fff; }
         .btn-ig { background: linear-gradient(45deg, #F58529, #DD2A7B, #8134AF); color: #fff; }
+        .btn-fb { background: #1877F2; color: #fff; }
+        .btn-th { background: #101010; color: #fff; border: 1px solid #333; }
     </style>
 </head>
 <body>
     <div class="wrap">
         <header>
-            <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Автоматична генерація репортажного кадру та живий звук</p>
+            <h1>🎬 Студія новин NEWS УКРАЇНА 365 (FLUX.1)</h1>
+            <p style="color:#8E9BAE; font-size:14px;">Генерація репортажного кадру через FLUX + розумне SEO та кнопки вигрузки</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 Додати своє фото з новини (якщо немає — ШІ згенерує кадр автоматично)
+                📷 Додати своє фото з новини (якщо немає — FLUX згенерує кадр автоматично)
                 <input type="file" id="mFile" accept="image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
-            <div id="st">⏳ Генерація тематичного кадру та монтаж... (25-35 сек)</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
+            <div id="st">⏳ Генерація фото через нейромережу FLUX.1, озвучка та прорахунок хештегів... (30-40 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
+
+                <!-- Блок SEO під рекомендації -->
+                <div class="seo-box">
+                    <div class="seo-title">
+                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
+                        <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
+                    </div>
+                    <div class="seo-text" id="seoContent"></div>
+                </div>
+
+                <!-- Кнопки швидкого переходу -->
+                <div class="social-title">🚀 Завантажити та відвантажити в соцмережі:</div>
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
                     <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
                     <a href="https://studio.youtube.com/channel/UC/videos/shortsvanity" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
                     <a href="https://www.instagram.com/" target="_blank" class="soc-link btn-ig">📸 Reels</a>
+                    <a href="https://www.facebook.com/reels/create" target="_blank" class="soc-link btn-fb">📘 Facebook</a>
+                    <a href="https://www.threads.net/" target="_blank" class="soc-link btn-th">🧵 Threads</a>
                 </div>
             </div>
         </div>
@@ -329,6 +377,8 @@ async def home():
 
     <script>
         let selectedFile = null;
+        let currentSeoText = '';
+
         function showF(i) {
             if(i.files && i.files[0]) {
                 selectedFile = i.files[0];
@@ -359,6 +409,8 @@ async def home():
                 if(d.video_url) {
                     vid.src = d.video_url;
                     document.getElementById('dlBtn').href = d.video_url;
+                    currentSeoText = d.seo_desc;
+                    document.getElementById('seoContent').innerText = d.seo_desc;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -368,6 +420,10 @@ async def home():
                 btn.disabled = false;
                 st.style.display = 'none';
             }
+        }
+        function copySeo() {
+            navigator.clipboard.writeText(currentSeoText);
+            alert("✓ Опис і хештеги скопійовано! Вставляйте у підпис до відео.");
         }
     </script>
 </body>
@@ -386,10 +442,10 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
         with open(media_p, "wb") as f:
             f.write(await media.read())
     else:
-        # Автоматична генерація безпечного репортажного кадру
-        ai_img = Config.TEMP_DIR / f"ai_{int(time.time())}.jpg"
-        if generate_safe_news_image(parsed["headline"] + " " + parsed["body"], ai_img):
-            media_p = ai_img
+        # Автоматична ШІ-генерація репортажного кадру через FLUX
+        flux_img = Config.TEMP_DIR / f"flux_{int(time.time())}.jpg"
+        if generate_pro_flux_image(parsed["headline"] + " " + parsed["body"], flux_img):
+            media_p = flux_img
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio)
@@ -404,7 +460,10 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
             try: p.unlink()
             except Exception: pass
 
-    return {"video_url": f"/videos/{out_file.name}"}
+    return {
+        "video_url": f"/videos/{out_file.name}",
+        "seo_desc": parsed["seo_desc"]
+    }
 
 @app.get("/videos/{filename}")
 async def get_vid(filename: str):
