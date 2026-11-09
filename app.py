@@ -1,7 +1,6 @@
 import os
 import re
 import time
-import urllib.parse
 import subprocess
 from pathlib import Path
 from datetime import datetime
@@ -9,7 +8,6 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-import requests
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import VideoClip, AudioFileClip, VideoFileClip
@@ -30,11 +28,12 @@ Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 def clean_for_tts(text: str) -> str:
+    # 1. Прибираємо посилання та юзернейми
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"t\.me/\S+", "", text)
     text = re.sub(r"@[a-zA-Z0-9_]+", "", text)
     
-    # Видаляємо всі емодзі
+    # 2. Прибираємо всі емодзі
     emoji_pattern = re.compile(
         "["
         "\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
@@ -44,75 +43,14 @@ def clean_for_tts(text: str) -> str:
     )
     text = emoji_pattern.sub(" ", text)
     
-    # Видаляємо знаки оклику/питання/символи НА ПОЧАТКУ фрази, щоб диктор їх не озвучував словесно
-    text = re.sub(r"^[!?.:;\-—–#*~⚡🔥👉👇⚠️🚨✔✓➔➡\s]+", "", text)
+    # 3. Примусово зрізаємо знаки пунктуації на початку тексту, щоб не було "Знак оклику..."
+    text = re.sub(r"^[\s!?:;.,\-—–_#*~⚡🔥👉👇⚠️🚨✔✓➔➡+/\\]+", "", text)
+    
+    # 4. Прибираємо спецсимволи всередині
     text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"'!?/\\|]", " ", text)
     text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
-
-def detect_news_theme(news_text: str) -> str:
-    """Розумний аналізатор пріоритетної теми новини (щоб не плутати землетрус зі школою)"""
-    t = news_text.lower()
-    
-    # 1. Природні катастрофи / землетруси (найвищий пріоритет)
-    if any(w in t for w in ["землетрус", "поштовх", "магнітуд", "підземн", "руйнуван", "сейсм"]):
-        return "earthquake aftermath, cracked road and building, city tremors, dramatic emergency photography, 35mm press photo"
-    
-    # 2. Воєнні події / обстріли / удари
-    if any(w in t for w in ["обстріл", "удар", "ракета", "дрон", "шахед", "приліт", "підстанц", "вибух"]):
-        return "city power outage at dusk, smoke in distance, emergency scene, dramatic photojournalism"
-    
-    # 3. Авто / Дороги
-    if any(w in t for w in ["дорог", "траса", "авто", "тариф", "проїзд", "водій"]):
-        return "highway with heavy traffic, toll road gate, cinematic cars on road at dusk, press photo"
-        
-    # 4. Політика / Суд / Закони
-    if any(w in t for w in ["суд", "вирок", "штраф", "закон", "рада", "депутат"]):
-        return "courthouse building exterior, law gavel on desk, official press photography, dramatic lighting"
-        
-    # 5. Школа / Освіта (тільки якщо це головна тема, а не випадкове слово)
-    if any(w in t for w in ["школяр", "третьокласник", "вчителька", "урок", "директор школи"]):
-        return "modern school hallway, police officer, realistic press photo, natural lighting"
-        
-    # За замовчуванням
-    return "breaking news scene, police cars with flashing lights on European street, dramatic photojournalism"
-
-def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
-    try:
-        scene_prompt = detect_news_theme(news_text)
-        prompt = f"authentic candid photojournalism, {scene_prompt}, 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
-        enc = urllib.parse.quote(prompt)
-        url = f"https://image.pollinations.ai/prompt/{enc}?model=flux&width=1080&height=1920&nologo=true&seed={int(time.time())}"
-        
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200 and len(r.content) > 15000:
-            with open(out_p, "wb") as f:
-                f.write(r.content)
-            return True
-    except Exception as e:
-        print(f"[FLUX Error] {e}")
-    return False
-
-def generate_seo(headline: str, body: str) -> Dict[str, str]:
-    combined = (headline + " " + body).lower()
-    if any(k in combined for k in ["землетрус", "поштовх", "вінниц", "київ", "житомир"]):
-        tags = ["#землетрус", "#україна", "#вінниця", "#київ", "#новиниукраїни", "#резонанс"]
-        q = "Ви відчули поштовхи у своєму місті? Пишіть, як у вас ситуація 👇"
-    elif any(k in combined for k in ["кропивниц", "удар", "світл"]):
-        tags = ["#кропивницький", "#обстріли", "#блекаут", "#новиниукраїни", "#війна"]
-        q = "Як зараз ситуація зі світлом? Обговорюємо нижче 👇"
-    elif any(k in combined for k in ["дорог", "авто", "тариф"]):
-        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#тарифи"]
-        q = "Чи готові ви платити за проїзд новими дорогами? 👇"
-    else:
-        tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Що думаєте про це? Пишіть у коментарях 👇"
-
-    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#тренди"]
-    all_tags = " ".join(tags + rec_tags)
-    desc = f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags}"
-    return {"desc": desc, "tags": all_tags}
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
     words = text.split()
@@ -132,34 +70,28 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
 
 def parse_post(raw_post: str) -> Dict[str, str]:
     clean = clean_for_tts(raw_post)
-    lines = [l.strip() for l in raw_post.split("\n") if len(l.strip()) > 3]
+    lines = [clean_for_tts(l) for l in raw_post.split("\n") if len(clean_for_tts(l)) > 3]
     
-    # Виділяємо чистий заголовок без символів
     if lines:
-        headline = clean_for_tts(lines[0])
-        body_lines = lines[1:] if len(lines) > 1 else lines
-        body = clean_for_tts(" ".join(body_lines))
+        headline = lines[0]
+        body = " ".join(lines[1:]) if len(lines) > 1 else lines[0]
     else:
         headline = clean[:50]
         body = clean
 
-    # Природна плавна начитка без подвійних повторів
-    cta = "Більше деталей та повне відео дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
+    cta = "Більше деталей дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
     voice = f"{headline}. {body}. {cta}"
-    seo_data = generate_seo(headline, body)
 
     return {
         "headline": headline.upper(),
         "body": body[:200],
-        "voiceover": clean_for_tts(voice),
-        "seo_desc": seo_data["desc"]
+        "voiceover": clean_for_tts(voice)
     }
 
 class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path):
         try:
-            # Чиста природна начитка
             cmd = [
                 "edge-tts",
                 "--voice", Config.VOICE_NAME,
@@ -243,13 +175,8 @@ class VideoEngine:
                             vc.close()
                         else:
                             im = Image.open(mf).convert("RGB")
-                        
-                        # Зрізаємо нижні 70px (гарантовано прибирає сторонній вотермарк нейромережі)
-                        ow, oh = im.size
-                        if oh > 200:
-                            im = im.crop((0, 0, ow, oh - 70))
-                            ow, oh = im.size
 
+                        ow, oh = im.size
                         tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
                         if ow / oh > tr:
                             nw = int(oh * tr)
@@ -262,13 +189,18 @@ class VideoEngine:
                         im_crop.paste(dim, (0, 0), dim)
                         prepared_frames.append(im_crop)
                     except Exception as e:
-                        print(f"[Media load err] {e}")
+                        print(f"[Media err] {e}")
 
+        # Якщо фото/відео не завантажено — якісний стильний телевізійний фон новин без ШІ-апокаліпсису
         if not prepared_frames:
-            bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
-            prepared_frames.append(bg_default)
+            bg_studio = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (12, 18, 30))
+            d_s = ImageDraw.Draw(bg_studio)
+            # Градієнтні кільця новинної студії
+            for r in range(800, 200, -80):
+                d_s.ellipse([(Config.VIDEO_WIDTH - r)//2, (Config.VIDEO_HEIGHT - r)//2, (Config.VIDEO_WIDTH + r)//2, (Config.VIDEO_HEIGHT + r)//2], outline=(20, 35, 60), width=3)
+            prepared_frames.append(bg_studio)
 
-        # Верхній блок (ОПУЩЕНИЙ В БЕЗПЕЧНУ ЗОНУ Y=260)
+        # Верхній блок у безпечній зоні TikTok (Y=260)
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         
@@ -303,7 +235,7 @@ class VideoEngine:
             frame_idx = int(t / 2.5) % num_frames
             cur_bg = prepared_frames[frame_idx]
 
-            zoom = 1.0 + 0.04 * ((t % 2.5) / 2.5)
+            zoom = 1.0 + 0.03 * ((t % 2.5) / 2.5)
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
             z_img = cur_bg.resize((zw, zh))
             frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
@@ -326,7 +258,7 @@ class VideoEngine:
         clip.close()
         return out_file
 
-app = FastAPI(title="Viral News Studio Pro")
+app = FastAPI(title="News Studio Pro")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -335,7 +267,7 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News Studio FLUX Pro</title>
+    <title>News Studio Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
@@ -351,10 +283,6 @@ async def home():
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
         .res { margin-top: 25px; display: none; }
         video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
-        .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
-        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
-        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
-        .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
         .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
         .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
         .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; }
@@ -370,33 +298,25 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Без озвучки смайликів/знаків, з точним підбором теми під землетруси, обстріли та події</p>
+            <p style="color:#8E9BAE; font-size:14px;">Без озвучки смайликів та знаків оклику, без сторонніх водяних знаків</p>
         </header>
 
         <div class="box">
-            <textarea id="pTxt" placeholder="Вставте сюди пост новини (заголовок та опис)..."></textarea>
+            <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📹 Додати своє фото/відео (можна виділити кілька файлів; якщо немає — ШІ підбере тематичний кадр)
+                📷 <b>Додайте фото або відео з новини</b> (можна обрати кілька файлів)
                 <input type="file" id="mFile" accept="video/*,image/*" multiple style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Точний аналіз теми новини, озвучка без знаків та монтаж... (25-35 сек)</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати чисте відео</button>
+            <div id="st">⏳ Монтаж відео та чиста озвучка... (25-30 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
-                <div class="seo-box">
-                    <div class="seo-title">
-                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
-                        <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
-                    </div>
-                    <div class="seo-text" id="seoContent"></div>
-                </div>
-
-                <div class="social-title">🚀 Завантажити та відвантажити в соцмережі:</div>
+                <div class="social-title">🚀 Завантажити та опублікувати:</div>
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
                     <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
@@ -411,8 +331,6 @@ async def home():
 
     <script>
         let selectedFiles = [];
-        let currentSeoText = '';
-
         function showF(i) {
             if(i.files && i.files.length > 0) {
                 selectedFiles = Array.from(i.files);
@@ -443,8 +361,6 @@ async def home():
                 if(d.video_url) {
                     vid.src = d.video_url;
                     document.getElementById('dlBtn').href = d.video_url;
-                    currentSeoText = d.seo_desc;
-                    document.getElementById('seoContent').innerText = d.seo_desc;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -455,10 +371,6 @@ async def home():
                 st.style.display = 'none';
             }
         }
-        function copySeo() {
-            navigator.clipboard.writeText(currentSeoText);
-            alert("✓ Опис і хештеги скопійовано! Вставляйте у підпис до відео.");
-        }
     </script>
 </body>
 </html>"""
@@ -466,7 +378,7 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(text: Optional[str] = Form(None), media_files: List[UploadFile] = File([])):
     if not text or not text.strip():
-        text = "НА ЗАХОДІ УКРАЇНИ СТАВСЯ ЗЕМЛЕТРУС. Повідомляють про підземні поштовхи."
+        text = "В УКРАЇНІ СТАВСЯ ЗЕМЛЕТРУС. Повідомляють про підземні поштовхи."
 
     parsed = parse_post(text)
 
@@ -479,12 +391,6 @@ async def api_generate(text: Optional[str] = Form(None), media_files: List[Uploa
                 with open(save_p, "wb") as f:
                     f.write(await mf.read())
                 saved_media.append(save_p)
-
-    # Якщо користувач не завантажив файл — генеруємо точний репортажний кадр під землетрус/катастрофу
-    if not saved_media:
-        flux_img = Config.TEMP_DIR / f"flux_{int(time.time())}.jpg"
-        if generate_pro_flux_image(parsed["headline"] + " " + parsed["body"], flux_img):
-            saved_media.append(flux_img)
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio)
@@ -499,10 +405,7 @@ async def api_generate(text: Optional[str] = Form(None), media_files: List[Uploa
             try: p.unlink()
             except Exception: pass
 
-    return {
-        "video_url": f"/videos/{out_file.name}",
-        "seo_desc": parsed["seo_desc"]
-    }
+    return {"video_url": f"/videos/{out_file.name}"}
 
 @app.get("/videos/{filename}")
 async def get_vid(filename: str):
