@@ -367,7 +367,7 @@ async def home():
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
                     <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
-                    <a href="https://studio.youtube.com/channel/UC/videos/shortsvanity" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
+                   <a href="https://www.youtube.com/upload" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
                     <a href="https://www.instagram.com/" target="_blank" class="soc-link btn-ig">📸 Reels</a>
                     <a href="https://www.facebook.com/reels/create" target="_blank" class="soc-link btn-fb">📘 Facebook</a>
                     <a href="https://www.threads.net/" target="_blank" class="soc-link btn-th">🧵 Threads</a>
