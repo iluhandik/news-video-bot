@@ -18,7 +18,7 @@ class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
     CHANNEL_USERNAME = "@news_ukraine365"
     VOICE_NAME = "uk-UA-OstapNeural"
-    VOICE_RATE = "+8%"
+    VOICE_RATE = "+10%"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
     VIDEO_FPS = 25
@@ -46,19 +46,53 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
+def make_mega_bait_voiceover(raw_post: str) -> Dict[str, str]:
+    """Автоматично перетворює величезні новини на ультра-клікбейтний сценарій на 15 секунд"""
+    clean = clean_for_tts(raw_post)
+    sentences = [s.strip() for s in re.split(r"[.!?\n]+", clean) if len(s.strip()) > 8]
+
+    if not sentences:
+        headline = "ТЕРМІНОВА НОВИНА"
+        teaser = "З'явилися шокуючі подробиці останніх подій."
+    elif len(sentences) == 1:
+        headline = sentences[0][:50]
+        teaser = sentences[0]
+    else:
+        # Перше речення - це заголовок
+        headline = sentences[0][:50]
+        # Беремо максимум 1-2 найважливіших речення з тексту, щоб не зачитувати всю простирадло
+        teaser = ". ".join(sentences[1:3])
+
+    # Клікбейтний гачок на виході
+    cliffhangers = [
+        "Але найскандальніші подробиці та повне відео ми вже виклали в закріпленому посиланні в шапці профілю!",
+        "Хто насправді за цим стоїть та повний список дивіться в нашому Телеграм каналі. Посилання в шапці!",
+        "Усі деталі та продовження, які видаляють з мережі, вже в нашому каналі за посиланням у шапці профілю!"
+    ]
+    import random
+    cliff = random.choice(cliffhangers)
+
+    full_voice = f"{headline}. {teaser}. {cliff}"
+
+    return {
+        "headline": headline.upper(),
+        "body": teaser,
+        "voiceover": clean_for_tts(full_voice)
+    }
+
 def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
     try:
         t_low = news_text.lower()
-        if any(w in t_low for w in ["кропивниц", "удар", "вибух", "світл", "підстанц", "обстріл"]):
+        if any(w in t_low for w in ["кропивниц", "удар", "вибух", "світл", "підстанц"]):
             scene = "smoke rising in city at night, emergency power outage, dramatic sky, documentary photography, 35mm"
-        elif any(w in t_low for w in ["школ", "учен", "клас", "діт", "вчител"]):
+        elif any(w in t_low for w in ["школ", "учен", "клас", "діт"]):
             scene = "hallway of modern school building, police officer talking with teachers, documentary press photography, natural light, 35mm"
-        elif any(w in t_low for w in ["суд", "штраф", "закон", "рада", "депутат"]):
+        elif any(w in t_low for w in ["суд", "штраф", "закон", "рада"]):
             scene = "courtroom interior, wooden judge bench, law gavel, official press photography, dramatic lighting"
-        elif any(w in t_low for w in ["дорог", "авто", "тариф", "траса", "водій"]):
+        elif any(w in t_low for w in ["дорог", "авто", "тариф"]):
             scene = "modern highway toll gate station with cars, evening dusk, realistic editorial photography"
         else:
-            scene = "breaking news scene, police cars with flashing lights on city street, documentary press photo"
+            scene = "breaking news scene, police cordon, city street, dramatic evening light, photojournalism"
 
         prompt = f"authentic candid photojournalism, {scene}, shot on 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
         enc = urllib.parse.quote(prompt)
@@ -75,20 +109,20 @@ def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
 
 def generate_seo(headline: str, body: str) -> Dict[str, str]:
     combined = (headline + " " + body).lower()
-    if any(k in combined for k in ["кропивниц", "удар", "світл", "підстанц"]):
+    if any(k in combined for k in ["кропивниц", "удар", "світл"]):
         tags = ["#кропивницький", "#обстріли", "#блекаут", "#новиниукраїни", "#війна"]
-        q = "Як зараз ситуація зі світлом у вашому районі? Пишіть у коментарях 👇"
-    elif any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
-        tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція", "#резонанс"]
-        q = "Як вважаєте, 1700 грн штрафу для батьків — це достатнє покарання? Пишіть у коментарях 👇"
-    elif any(k in combined for k in ["дорог", "авто", "тариф", "проїзд", "водій"]):
-        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дороги", "#тарифи"]
-        q = "Чи готові ви платити такі гроші за проїзд новими трасами? 👇"
+        q = "Як ситуація зі світлом у вашому місті? Обговорюємо нижче 👇"
+    elif any(k in combined for k in ["школ", "учен", "ніж", "штраф"]):
+        tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція"]
+        q = "Чи справедливе таке покарання? Ваша думка в коментарях 👇"
+    elif any(k in combined for k in ["дорог", "авто", "тариф"]):
+        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#тарифи"]
+        q = "Чи готові ви платити за проїзд новими дорогами? 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Яка ваша думка щодо цієї ситуації? Пишіть у коментарях 👇"
+        q = "Що думаєте про це? Пишіть у коментарях 👇"
 
-    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
+    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#тренди"]
     all_tags = " ".join(tags + rec_tags)
     desc = f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags}"
     return {"desc": desc, "tags": all_tags}
@@ -108,38 +142,6 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
             cur = [w]
     if cur: lines.append(" ".join(cur))
     return lines
-
-def parse_post(raw_post: str) -> Dict[str, str]:
-    clean = clean_for_tts(raw_post)
-    lines = [l.strip() for l in raw_post.split("\n") if len(l.strip()) > 3]
-    
-    # Виділяємо заголовок і текст БЕЗ дублювання
-    if len(lines) > 1:
-        headline = clean_for_tts(lines[0])
-        body_text = clean_for_tts(" ".join(lines[1:]))
-        voice = f"{headline}. {body_text}."
-    else:
-        # Якщо в пості лише один суцільний текст
-        sentences = [s.strip() for s in re.split(r"[.!?]+", clean) if len(s.strip()) > 5]
-        if len(sentences) > 1:
-            headline = sentences[0]
-            body_text = ". ".join(sentences[1:])
-            voice = f"{headline}. {body_text}."
-        else:
-            headline = clean[:50]
-            body_text = clean
-            voice = f"{clean}."
-
-    cta = "Повні деталі дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
-    full_voice = f"{voice} {cta}"
-    seo_data = generate_seo(headline, body_text)
-
-    return {
-        "headline": headline.upper(),
-        "body": body_text,
-        "voiceover": clean_for_tts(full_voice),
-        "seo_desc": seo_data["desc"]
-    }
 
 class TTSEngine:
     @classmethod
@@ -211,44 +213,45 @@ class VideoEngine:
         draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
-    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_path: Optional[Path] = None):
+    def render_multi(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_files: List[Path]):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        is_video_media = False
-        user_video_clip = None
-        bg_base = None
+        # Підготовка слайд-шоу з медіа (фото або відео)
+        prepared_frames = []
+        if media_files:
+            for mf in media_files:
+                if mf.exists():
+                    try:
+                        ext = mf.suffix.lower()
+                        if ext in [".mp4", ".mov", ".webm", ".avi"]:
+                            # Для відео беремо перший кадр
+                            vc = VideoFileClip(str(mf))
+                            f_np = vc.get_frame(1.0 if vc.duration > 1 else 0.0)
+                            im = Image.fromarray(f_np).convert("RGB")
+                            vc.close()
+                        else:
+                            im = Image.open(mf).convert("RGB")
+                        
+                        # Обрізка на 9:16
+                        ow, oh = im.size
+                        tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+                        if ow / oh > tr:
+                            nw = int(oh * tr)
+                            c_box = ((ow - nw)//2, 0, (ow + nw)//2, oh)
+                        else:
+                            nh = int(ow / tr)
+                            c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
+                        im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+                        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 110))
+                        im_crop.paste(dim, (0, 0), dim)
+                        prepared_frames.append(im_crop)
+                    except Exception as e:
+                        print(f"[Media load err] {e}")
 
-        if media_path and media_path.exists():
-            ext = media_path.suffix.lower()
-            if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"]:
-                try:
-                    user_video_clip = VideoFileClip(str(media_path)).resized(width=1000)
-                    is_video_media = True
-                except Exception:
-                    is_video_media = False
-            
-            if not is_video_media:
-                try:
-                    orig = Image.open(media_path).convert("RGB")
-                    ow, oh = orig.size
-                    if oh > 100:
-                        orig = orig.crop((0, 0, ow, oh - 60))
-                    
-                    tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
-                    if ow / oh > tr:
-                        nw = int(oh * tr)
-                        crop_box = ((ow - nw) // 2, 0, (ow + nw) // 2, oh)
-                    else:
-                        nh = int(ow / tr)
-                        crop_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
-                    bg_base = orig.crop(crop_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
-                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
-                    bg_base.paste(dim, (0, 0), dim)
-                except Exception:
-                    bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
-        else:
-            bg_base = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (18, 25, 40))
+        if not prepared_frames:
+            bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
+            prepared_frames.append(bg_default)
 
         # Верхній блок новини
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
@@ -279,27 +282,22 @@ class VideoEngine:
         c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=self.font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=self.font_badge, fill=(42, 171, 238, 255))
 
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
+        num_frames = len(prepared_frames)
 
         def make_frame(t):
-            if is_video_media and user_video_clip:
-                sub_t = t % user_video_clip.duration
-                raw_frame = user_video_clip.get_frame(sub_t)
-                v_img = Image.fromarray(raw_frame)
-                
-                bg_v = v_img.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT)).filter(ImageFilter.BoxBlur(12))
-                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 140))
-                bg_v.paste(dim, (0, 0), dim)
-                frame = bg_v.convert("RGBA")
+            # Якщо завантажено кілька фото/відео — змінюємо кадр кожні 2.5 секунди
+            frame_idx = int(t / 2.5) % num_frames
+            cur_bg = prepared_frames[frame_idx]
 
-                frame.paste(v_img, ((Config.VIDEO_WIDTH - v_img.width)//2, 540))
-            else:
-                zoom = 1.0 + 0.04 * (t / max(1.0, duration))
-                zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
-                z_img = bg_base.resize((zw, zh))
-                frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+            # Плавний легкий рух зуму всередині поточного кадру
+            zoom = 1.0 + 0.03 * ((t % 2.5) / 2.5)
+            zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
+            z_img = cur_bg.resize((zw, zh))
+            frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
             frame.alpha_composite(top_bar, (0, 0))
 
+            # Субтитри по центру
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
@@ -314,8 +312,6 @@ class VideoEngine:
         clip.write_videofile(str(out_file), fps=Config.VIDEO_FPS, codec="libx264", audio_codec="aac", preset="ultrafast", threads=2, logger=None)
         audio_clip.close()
         clip.close()
-        if user_video_clip:
-            user_video_clip.close()
         return out_file
 
 app = FastAPI(title="Viral News Studio Pro")
@@ -327,7 +323,7 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News Studio FLUX Pro</title>
+    <title>News Studio Multi-Media</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
@@ -338,7 +334,7 @@ async def home():
         h1 { font-size: 26px; font-weight: 800; }
         .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
         textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232E42; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
-        .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
+        .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 18px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
         .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
         .res { margin-top: 25px; display: none; }
@@ -362,20 +358,20 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Без дублювання слів, з підтримкою відео та фото</p>
+            <p style="color:#8E9BAE; font-size:14px;">Мультимедіа нарізка (кілька фото/відео) + автоскорочення до мега-клікбейту</p>
         </header>
 
         <div class="box">
-            <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
+            <textarea id="pTxt" placeholder="Вставте сюди пост новини будь-якого розміру (бот сам зробить короткий вірусний клікбейт)..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📹 <b>Додати ВІДЕО або ФОТО з новини</b> (підтримує mp4, mov, jpg, png)
-                <input type="file" id="mFile" accept="video/*,image/*" style="display:none;" onchange="showF(this)">
+                📷 <b>Додати одне або КІЛЬКА фото/відео з посту</b> (можна обрати одразу 2-5 файлів)
+                <input type="file" id="mFile" accept="image/*,video/*" multiple style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Монтаж відео, озвучка та прорахунок хештегів... (30-40 сек)</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати клікбейт-відео</button>
+            <div id="st">⏳ Монтаж динамічної нарізки з медіа та генерація звуку... (25-35 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -402,13 +398,13 @@ async def home():
     </div>
 
     <script>
-        let selectedFile = null;
+        let selectedFiles = [];
         let currentSeoText = '';
 
         function showF(i) {
-            if(i.files && i.files[0]) {
-                selectedFile = i.files[0];
-                document.getElementById('mTxt').innerText = '✓ Обрано файл: ' + selectedFile.name;
+            if(i.files && i.files.length > 0) {
+                selectedFiles = Array.from(i.files);
+                document.getElementById('mTxt').innerText = '✓ Обрано файлів: ' + selectedFiles.length + ' (' + selectedFiles.map(f => f.name).join(', ') + ')';
             }
         }
         async function gen() {
@@ -424,8 +420,8 @@ async def home():
             try {
                 const fd = new FormData();
                 fd.append('text', txt);
-                if(selectedFile) {
-                    fd.append('media', selectedFile);
+                for(let file of selectedFiles) {
+                    fd.append('media_files', file);
                 }
                 const res = await fetch('/api/generate', { method: 'POST', body: fd });
                 if (!res.ok) {
@@ -456,22 +452,28 @@ async def home():
 </html>"""
 
 @app.post("/api/generate")
-async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadFile] = File(None)):
+async def api_generate(text: Optional[str] = Form(None), media_files: List[UploadFile] = File([])):
     if not text or not text.strip():
         text = "ВОРОЖОГО УДАРУ ЗАЗНАВ КРОПИВНИЦЬКИЙ. Частина міста наразі без світла."
 
-    parsed = parse_post(text)
+    parsed = make_mega_bait_voiceover(text)
+    seo_data = generate_seo(parsed["headline"], parsed["body"])
 
-    media_p = None
-    if media and media.filename:
-        ext = Path(media.filename).suffix
-        media_p = Config.TEMP_DIR / f"media_{int(time.time())}{ext}"
-        with open(media_p, "wb") as f:
-            f.write(await media.read())
-    else:
+    saved_media = []
+    if media_files:
+        for idx, mf in enumerate(media_files):
+            if mf.filename:
+                ext = Path(mf.filename).suffix
+                save_p = Config.TEMP_DIR / f"m_{int(time.time())}_{idx}{ext}"
+                with open(save_p, "wb") as f:
+                    f.write(await mf.read())
+                saved_media.append(save_p)
+
+    # Якщо медіа взагалі не завантажено - робимо 1 кадр через FLUX
+    if not saved_media:
         flux_img = Config.TEMP_DIR / f"flux_{int(time.time())}.jpg"
         if generate_pro_flux_image(parsed["headline"] + " " + parsed["body"], flux_img):
-            media_p = flux_img
+            saved_media.append(flux_img)
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio)
@@ -479,16 +481,16 @@ async def api_generate(text: Optional[str] = Form(None), media: Optional[UploadF
 
     engine = VideoEngine()
     out_file = Config.OUTPUT_DIR / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    engine.render(parsed, audio_path, sub_events, out_file, media_p)
+    engine.render_multi(parsed, audio_path, sub_events, out_file, saved_media)
 
-    for p in [temp_audio, media_p]:
+    for p in [temp_audio] + saved_media:
         if p and p.exists():
             try: p.unlink()
             except Exception: pass
 
     return {
         "video_url": f"/videos/{out_file.name}",
-        "seo_desc": parsed["seo_desc"]
+        "seo_desc": seo_data["desc"]
     }
 
 @app.get("/videos/{filename}")
