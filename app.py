@@ -33,6 +33,8 @@ def clean_for_tts(text: str) -> str:
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"t\.me/\S+", "", text)
     text = re.sub(r"@[a-zA-Z0-9_]+", "", text)
+    
+    # Видаляємо всі емодзі
     emoji_pattern = re.compile(
         "["
         "\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
@@ -41,60 +43,45 @@ def clean_for_tts(text: str) -> str:
         "]+", flags=re.UNICODE
     )
     text = emoji_pattern.sub(" ", text)
-    text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"']", " ", text)
+    
+    # Видаляємо знаки оклику/питання/символи НА ПОЧАТКУ фрази, щоб диктор їх не озвучував словесно
+    text = re.sub(r"^[!?.:;\-—–#*~⚡🔥👉👇⚠️🚨✔✓➔➡\s]+", "", text)
+    text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"'!?/\\|]", " ", text)
     text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
-def make_mega_bait_voiceover(raw_post: str) -> Dict[str, str]:
-    """Автоматично перетворює величезні новини на ультра-клікбейтний сценарій на 15 секунд"""
-    clean = clean_for_tts(raw_post)
-    sentences = [s.strip() for s in re.split(r"[.!?\n]+", clean) if len(s.strip()) > 8]
-
-    if not sentences:
-        headline = "ТЕРМІНОВА НОВИНА"
-        teaser = "З'явилися шокуючі подробиці останніх подій."
-    elif len(sentences) == 1:
-        headline = sentences[0][:50]
-        teaser = sentences[0]
-    else:
-        # Перше речення - це заголовок
-        headline = sentences[0][:50]
-        # Беремо максимум 1-2 найважливіших речення з тексту, щоб не зачитувати всю простирадло
-        teaser = ". ".join(sentences[1:3])
-
-    # Клікбейтний гачок на виході
-    cliffhangers = [
-        "Але найскандальніші подробиці та повне відео ми вже виклали в закріпленому посиланні в шапці профілю!",
-        "Хто насправді за цим стоїть та повний список дивіться в нашому Телеграм каналі. Посилання в шапці!",
-        "Усі деталі та продовження, які видаляють з мережі, вже в нашому каналі за посиланням у шапці профілю!"
-    ]
-    import random
-    cliff = random.choice(cliffhangers)
-
-    full_voice = f"{headline}. {teaser}. {cliff}"
-
-    return {
-        "headline": headline.upper(),
-        "body": teaser,
-        "voiceover": clean_for_tts(full_voice)
-    }
+def detect_news_theme(news_text: str) -> str:
+    """Розумний аналізатор пріоритетної теми новини (щоб не плутати землетрус зі школою)"""
+    t = news_text.lower()
+    
+    # 1. Природні катастрофи / землетруси (найвищий пріоритет)
+    if any(w in t for w in ["землетрус", "поштовх", "магнітуд", "підземн", "руйнуван", "сейсм"]):
+        return "earthquake aftermath, cracked road and building, city tremors, dramatic emergency photography, 35mm press photo"
+    
+    # 2. Воєнні події / обстріли / удари
+    if any(w in t for w in ["обстріл", "удар", "ракета", "дрон", "шахед", "приліт", "підстанц", "вибух"]):
+        return "city power outage at dusk, smoke in distance, emergency scene, dramatic photojournalism"
+    
+    # 3. Авто / Дороги
+    if any(w in t for w in ["дорог", "траса", "авто", "тариф", "проїзд", "водій"]):
+        return "highway with heavy traffic, toll road gate, cinematic cars on road at dusk, press photo"
+        
+    # 4. Політика / Суд / Закони
+    if any(w in t for w in ["суд", "вирок", "штраф", "закон", "рада", "депутат"]):
+        return "courthouse building exterior, law gavel on desk, official press photography, dramatic lighting"
+        
+    # 5. Школа / Освіта (тільки якщо це головна тема, а не випадкове слово)
+    if any(w in t for w in ["школяр", "третьокласник", "вчителька", "урок", "директор школи"]):
+        return "modern school hallway, police officer, realistic press photo, natural lighting"
+        
+    # За замовчуванням
+    return "breaking news scene, police cars with flashing lights on European street, dramatic photojournalism"
 
 def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
     try:
-        t_low = news_text.lower()
-        if any(w in t_low for w in ["кропивниц", "удар", "вибух", "світл", "підстанц"]):
-            scene = "smoke rising in city at night, emergency power outage, dramatic sky, documentary photography, 35mm"
-        elif any(w in t_low for w in ["школ", "учен", "клас", "діт"]):
-            scene = "hallway of modern school building, police officer talking with teachers, documentary press photography, natural light, 35mm"
-        elif any(w in t_low for w in ["суд", "штраф", "закон", "рада"]):
-            scene = "courtroom interior, wooden judge bench, law gavel, official press photography, dramatic lighting"
-        elif any(w in t_low for w in ["дорог", "авто", "тариф"]):
-            scene = "modern highway toll gate station with cars, evening dusk, realistic editorial photography"
-        else:
-            scene = "breaking news scene, police cordon, city street, dramatic evening light, photojournalism"
-
-        prompt = f"authentic candid photojournalism, {scene}, shot on 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
+        scene_prompt = detect_news_theme(news_text)
+        prompt = f"authentic candid photojournalism, {scene_prompt}, 35mm lens, hyperrealistic, detailed, 8k, award winning AP news photo"
         enc = urllib.parse.quote(prompt)
         url = f"https://image.pollinations.ai/prompt/{enc}?model=flux&width=1080&height=1920&nologo=true&seed={int(time.time())}"
         
@@ -109,12 +96,12 @@ def generate_pro_flux_image(news_text: str, out_p: Path) -> bool:
 
 def generate_seo(headline: str, body: str) -> Dict[str, str]:
     combined = (headline + " " + body).lower()
-    if any(k in combined for k in ["кропивниц", "удар", "світл"]):
+    if any(k in combined for k in ["землетрус", "поштовх", "вінниц", "київ", "житомир"]):
+        tags = ["#землетрус", "#україна", "#вінниця", "#київ", "#новиниукраїни", "#резонанс"]
+        q = "Ви відчули поштовхи у своєму місті? Пишіть, як у вас ситуація 👇"
+    elif any(k in combined for k in ["кропивниц", "удар", "світл"]):
         tags = ["#кропивницький", "#обстріли", "#блекаут", "#новиниукраїни", "#війна"]
-        q = "Як ситуація зі світлом у вашому місті? Обговорюємо нижче 👇"
-    elif any(k in combined for k in ["школ", "учен", "ніж", "штраф"]):
-        tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція"]
-        q = "Чи справедливе таке покарання? Ваша думка в коментарях 👇"
+        q = "Як зараз ситуація зі світлом? Обговорюємо нижче 👇"
     elif any(k in combined for k in ["дорог", "авто", "тариф"]):
         tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#тарифи"]
         q = "Чи готові ви платити за проїзд новими дорогами? 👇"
@@ -143,10 +130,36 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
     if cur: lines.append(" ".join(cur))
     return lines
 
+def parse_post(raw_post: str) -> Dict[str, str]:
+    clean = clean_for_tts(raw_post)
+    lines = [l.strip() for l in raw_post.split("\n") if len(l.strip()) > 3]
+    
+    # Виділяємо чистий заголовок без символів
+    if lines:
+        headline = clean_for_tts(lines[0])
+        body_lines = lines[1:] if len(lines) > 1 else lines
+        body = clean_for_tts(" ".join(body_lines))
+    else:
+        headline = clean[:50]
+        body = clean
+
+    # Природна плавна начитка без подвійних повторів
+    cta = "Більше деталей та повне відео дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
+    voice = f"{headline}. {body}. {cta}"
+    seo_data = generate_seo(headline, body)
+
+    return {
+        "headline": headline.upper(),
+        "body": body[:200],
+        "voiceover": clean_for_tts(voice),
+        "seo_desc": seo_data["desc"]
+    }
+
 class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path):
         try:
+            # Чиста природна начитка
             cmd = [
                 "edge-tts",
                 "--voice", Config.VOICE_NAME,
@@ -213,11 +226,10 @@ class VideoEngine:
         draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
-    def render_multi(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_files: List[Path]):
+    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_files: List[Path]):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        # Підготовка слайд-шоу з медіа (фото або відео)
         prepared_frames = []
         if media_files:
             for mf in media_files:
@@ -225,7 +237,6 @@ class VideoEngine:
                     try:
                         ext = mf.suffix.lower()
                         if ext in [".mp4", ".mov", ".webm", ".avi"]:
-                            # Для відео беремо перший кадр
                             vc = VideoFileClip(str(mf))
                             f_np = vc.get_frame(1.0 if vc.duration > 1 else 0.0)
                             im = Image.fromarray(f_np).convert("RGB")
@@ -233,8 +244,12 @@ class VideoEngine:
                         else:
                             im = Image.open(mf).convert("RGB")
                         
-                        # Обрізка на 9:16
+                        # Зрізаємо нижні 70px (гарантовано прибирає сторонній вотермарк нейромережі)
                         ow, oh = im.size
+                        if oh > 200:
+                            im = im.crop((0, 0, ow, oh - 70))
+                            ow, oh = im.size
+
                         tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
                         if ow / oh > tr:
                             nw = int(oh * tr)
@@ -253,7 +268,7 @@ class VideoEngine:
             bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
             prepared_frames.append(bg_default)
 
-        # Верхній блок новини
+        # Верхній блок (ОПУЩЕНИЙ В БЕЗПЕЧНУ ЗОНУ Y=260)
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         
@@ -285,19 +300,16 @@ class VideoEngine:
         num_frames = len(prepared_frames)
 
         def make_frame(t):
-            # Якщо завантажено кілька фото/відео — змінюємо кадр кожні 2.5 секунди
             frame_idx = int(t / 2.5) % num_frames
             cur_bg = prepared_frames[frame_idx]
 
-            # Плавний легкий рух зуму всередині поточного кадру
-            zoom = 1.0 + 0.03 * ((t % 2.5) / 2.5)
+            zoom = 1.0 + 0.04 * ((t % 2.5) / 2.5)
             zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
             z_img = cur_bg.resize((zw, zh))
             frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
             frame.alpha_composite(top_bar, (0, 0))
 
-            # Субтитри по центру
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
@@ -323,7 +335,7 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News Studio Multi-Media</title>
+    <title>News Studio FLUX Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
@@ -334,7 +346,7 @@ async def home():
         h1 { font-size: 26px; font-weight: 800; }
         .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
         textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232E42; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
-        .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 18px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
+        .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
         .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
         .res { margin-top: 25px; display: none; }
@@ -358,20 +370,20 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Мультимедіа нарізка (кілька фото/відео) + автоскорочення до мега-клікбейту</p>
+            <p style="color:#8E9BAE; font-size:14px;">Без озвучки смайликів/знаків, з точним підбором теми під землетруси, обстріли та події</p>
         </header>
 
         <div class="box">
-            <textarea id="pTxt" placeholder="Вставте сюди пост новини будь-якого розміру (бот сам зробить короткий вірусний клікбейт)..."></textarea>
+            <textarea id="pTxt" placeholder="Вставте сюди пост новини (заголовок та опис)..."></textarea>
             
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 <b>Додати одне або КІЛЬКА фото/відео з посту</b> (можна обрати одразу 2-5 файлів)
-                <input type="file" id="mFile" accept="image/*,video/*" multiple style="display:none;" onchange="showF(this)">
+                📹 Додати своє фото/відео (можна виділити кілька файлів; якщо немає — ШІ підбере тематичний кадр)
+                <input type="file" id="mFile" accept="video/*,image/*" multiple style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати клікбейт-відео</button>
-            <div id="st">⏳ Монтаж динамічної нарізки з медіа та генерація звуку... (25-35 сек)</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
+            <div id="st">⏳ Точний аналіз теми новини, озвучка без знаків та монтаж... (25-35 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -404,7 +416,7 @@ async def home():
         function showF(i) {
             if(i.files && i.files.length > 0) {
                 selectedFiles = Array.from(i.files);
-                document.getElementById('mTxt').innerText = '✓ Обрано файлів: ' + selectedFiles.length + ' (' + selectedFiles.map(f => f.name).join(', ') + ')';
+                document.getElementById('mTxt').innerText = '✓ Обрано файлів: ' + selectedFiles.length;
             }
         }
         async function gen() {
@@ -454,10 +466,9 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(text: Optional[str] = Form(None), media_files: List[UploadFile] = File([])):
     if not text or not text.strip():
-        text = "ВОРОЖОГО УДАРУ ЗАЗНАВ КРОПИВНИЦЬКИЙ. Частина міста наразі без світла."
+        text = "НА ЗАХОДІ УКРАЇНИ СТАВСЯ ЗЕМЛЕТРУС. Повідомляють про підземні поштовхи."
 
-    parsed = make_mega_bait_voiceover(text)
-    seo_data = generate_seo(parsed["headline"], parsed["body"])
+    parsed = parse_post(text)
 
     saved_media = []
     if media_files:
@@ -469,7 +480,7 @@ async def api_generate(text: Optional[str] = Form(None), media_files: List[Uploa
                     f.write(await mf.read())
                 saved_media.append(save_p)
 
-    # Якщо медіа взагалі не завантажено - робимо 1 кадр через FLUX
+    # Якщо користувач не завантажив файл — генеруємо точний репортажний кадр під землетрус/катастрофу
     if not saved_media:
         flux_img = Config.TEMP_DIR / f"flux_{int(time.time())}.jpg"
         if generate_pro_flux_image(parsed["headline"] + " " + parsed["body"], flux_img):
@@ -481,7 +492,7 @@ async def api_generate(text: Optional[str] = Form(None), media_files: List[Uploa
 
     engine = VideoEngine()
     out_file = Config.OUTPUT_DIR / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    engine.render_multi(parsed, audio_path, sub_events, out_file, saved_media)
+    engine.render(parsed, audio_path, sub_events, out_file, saved_media)
 
     for p in [temp_audio] + saved_media:
         if p and p.exists():
@@ -490,7 +501,7 @@ async def api_generate(text: Optional[str] = Form(None), media_files: List[Uploa
 
     return {
         "video_url": f"/videos/{out_file.name}",
-        "seo_desc": seo_data["desc"]
+        "seo_desc": parsed["seo_desc"]
     }
 
 @app.get("/videos/{filename}")
