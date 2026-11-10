@@ -50,25 +50,21 @@ def sanitize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 def generate_seo(headline: str, body: str) -> str:
-    """Генерує вірусний опис та хештеги індивідуально під зміст новини"""
     combined = (headline + " " + body).lower()
-    if any(k in combined for k in ["землетрус", "поштовх", "вінниц", "київ", "житомир"]):
-        tags = ["#землетрус", "#україна", "#вінниця", "#київ", "#новиниукраїни", "#резонанс"]
+    if any(k in combined for k in ["патрон", "пес", "собак", "цуцен"]):
+        tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини", "#позитив"]
+        q = "Як вам така чудова новина? Пишіть ваші привітання в коментарях 👇"
+    elif any(k in combined for k in ["землетрус", "поштовх", "вінниц", "київ"]):
+        tags = ["#землетрус", "#україна", "#вінниця", "#київ", "#новиниукраїни"]
         q = "Ви відчули поштовхи у своєму місті? Пишіть, як у вас ситуація 👇"
-    elif any(k in combined for k in ["кропивниц", "удар", "світл", "підстанц"]):
-        tags = ["#кропивницький", "#обстріли", "#блекаут", "#новиниукраїни", "#війна"]
-        q = "Як зараз ситуація зі світлом у вашому районі? Обговорюємо нижче 👇"
-    elif any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
-        tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція", "#резонанс"]
-        q = "Як вважаєте, 1700 грн штрафу для батьків — це достатнє покарання? Пишіть у коментарях 👇"
-    elif any(k in combined for k in ["дорог", "авто", "тариф", "проїзд", "водій"]):
-        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дороги", "#тарифи"]
+    elif any(k in combined for k in ["дорог", "авто", "тариф"]):
+        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#тарифи"]
         q = "Чи готові ви платити такі гроші за проїзд новими трасами? 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Яка ваша думка щодо цієї ситуації? Пишіть у коментарях 👇"
+        q = "Яка ваша думка щодо цієї новини? Обговорюємо в коментарях 👇"
 
-    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
+    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#тренди"]
     all_tags = " ".join(tags + rec_tags)
     return f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags}"
 
@@ -90,18 +86,26 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
 
 def parse_post(raw_post: str) -> Dict[str, str]:
     clean = sanitize_text(raw_post)
-    sentences = [s.strip() for s in re.split(r"[.\n]+", clean) if len(s.strip()) > 3]
+    lines = [sanitize_text(l) for l in raw_post.split("\n") if len(sanitize_text(l)) > 3]
 
-    if sentences:
-        headline = sentences[0]
-        body = ". ".join(sentences[1:]) if len(sentences) > 1 else sentences[0]
+    # СУВОРЕ УСУНЕННЯ ПОВТОРІВ
+    if len(lines) > 1:
+        headline = lines[0]
+        # Перевіряємо, чи наступні рядки не повторюють заголовок
+        other_lines = [l for l in lines[1:] if l.lower() != headline.lower()]
+        body = ". ".join(other_lines) if other_lines else ""
     else:
-        headline = clean[:50]
-        body = clean
+        headline = clean
+        body = ""
 
+    # Формування озвучки: якщо тексту немає, озвучується ТІЛЬКИ заголовок
     cta = "Більше деталей дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
-    voice = f"{headline}. {body}. {cta}"
-    seo_desc = generate_seo(headline, body)
+    if body and body.lower() != headline.lower():
+        voice = f"{headline}. {body}. {cta}"
+    else:
+        voice = f"{headline}. {cta}"
+
+    seo_desc = generate_seo(headline, body if body else headline)
 
     return {
         "headline": sanitize_text(headline).upper(),
@@ -113,13 +117,13 @@ def parse_post(raw_post: str) -> Dict[str, str]:
 class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path, voice_name: str = "uk-UA-OstapNeural"):
-        final_clean = sanitize_text(text)
+        safe_text = sanitize_text(text)
         try:
             cmd = [
                 "edge-tts",
                 "--voice", voice_name,
                 "--rate", "+6%",
-                "--text", final_clean,
+                "--text", safe_text,
                 "--write-media", str(out_p)
             ]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=25)
@@ -127,7 +131,7 @@ class TTSEngine:
             pass
 
         if not out_p.exists() or out_p.stat().st_size < 100:
-            dur = max(8.0, min(24.0, len(final_clean) / 14.0))
+            dur = max(6.0, min(24.0, len(safe_text) / 14.0))
             cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:beep_factor=4:duration={dur}", "-filter:a", "volume=0.2", str(out_p)]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -140,7 +144,7 @@ class TTSEngine:
             r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             return float(r.stdout.strip())
         except Exception:
-            return 16.0
+            return 12.0
 
     @classmethod
     def chunks(cls, text: str, dur: float):
@@ -326,7 +330,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">З блоком хештегів під рекомендації та вибором голосу</p>
+            <p style="color:#8E9BAE; font-size:14px;">Без жодних подвійних повторів тексту на початку</p>
         </header>
 
         <div class="box">
@@ -345,12 +349,11 @@ async def home():
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати чисте відео</button>
-            <div id="st">⏳ Очищення тексту, запис чистого голосу та монтаж... (20-25 сек)</div>
+            <div id="st">⏳ Монтаж відео без повторень... (15-20 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
-                <!-- Блок індивідуального опису та хештегів -->
                 <div class="seo-box">
                     <div class="seo-title">
                         <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
