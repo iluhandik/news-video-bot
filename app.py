@@ -29,12 +29,10 @@ def sanitize_text(text: str) -> str:
     """Тотальне очищення: видаляє будь-які символи, емодзі та знаки на початку і всередині тексту"""
     if not text:
         return ""
-    # 1. Прибираємо посилання та юзернейми
     text = re.sub(r"https?://\S+", " ", text)
     text = re.sub(r"t\.me/\S+", " ", text)
     text = re.sub(r"@[a-zA-Z0-9_]+", " ", text)
 
-    # 2. Видаляємо всі емодзі
     emoji_pattern = re.compile(
         "["
         "\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
@@ -44,18 +42,35 @@ def sanitize_text(text: str) -> str:
     )
     text = emoji_pattern.sub(" ", text)
 
-    # 3. Видаляємо абсолютно всі спецсимволи і знаки пунктуації, через які диктор збивається
     text = text.replace("!?", " ").replace("?!", " ").replace("!", " ").replace("?", " ")
     text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"'()\[\]{}:;+/\\]", " ", text)
-    
-    # 4. Виправляємо дефіси у словах (24-річний -> 24 річний)
     text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
     text = text.replace("-", " ")
-
-    # 5. Очищення крапок і зайвих пробілів
     text = re.sub(r"\.{2,}", ".", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"\s+", " ", text).strip()
+
+def generate_seo(headline: str, body: str) -> str:
+    """Генерує вірусний опис та хештеги індивідуально під зміст новини"""
+    combined = (headline + " " + body).lower()
+    if any(k in combined for k in ["землетрус", "поштовх", "вінниц", "київ", "житомир"]):
+        tags = ["#землетрус", "#україна", "#вінниця", "#київ", "#новиниукраїни", "#резонанс"]
+        q = "Ви відчули поштовхи у своєму місті? Пишіть, як у вас ситуація 👇"
+    elif any(k in combined for k in ["кропивниц", "удар", "світл", "підстанц"]):
+        tags = ["#кропивницький", "#обстріли", "#блекаут", "#новиниукраїни", "#війна"]
+        q = "Як зараз ситуація зі світлом у вашому районі? Обговорюємо нижче 👇"
+    elif any(k in combined for k in ["школ", "учен", "ніж", "штраф", "поліц"]):
+        tags = ["#надзвичайніновини", "#школа", "#батьки", "#львів", "#поліція", "#резонанс"]
+        q = "Як вважаєте, 1700 грн штрафу для батьків — це достатнє покарання? Пишіть у коментарях 👇"
+    elif any(k in combined for k in ["дорог", "авто", "тариф", "проїзд", "водій"]):
+        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дороги", "#тарифи"]
+        q = "Чи готові ви платити такі гроші за проїзд новими трасами? 👇"
+    else:
+        tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
+        q = "Яка ваша думка щодо цієї ситуації? Пишіть у коментарях 👇"
+
+    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
+    all_tags = " ".join(tags + rec_tags)
+    return f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags}"
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
     words = text.split()
@@ -74,7 +89,6 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
     return lines
 
 def parse_post(raw_post: str) -> Dict[str, str]:
-    # Зачищаємо текст на самому вході
     clean = sanitize_text(raw_post)
     sentences = [s.strip() for s in re.split(r"[.\n]+", clean) if len(s.strip()) > 3]
 
@@ -87,17 +101,18 @@ def parse_post(raw_post: str) -> Dict[str, str]:
 
     cta = "Більше деталей дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
     voice = f"{headline}. {body}. {cta}"
+    seo_desc = generate_seo(headline, body)
 
     return {
         "headline": sanitize_text(headline).upper(),
         "body": sanitize_text(body)[:220],
-        "voiceover": sanitize_text(voice)
+        "voiceover": sanitize_text(voice),
+        "seo_desc": seo_desc
     }
 
 class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path, voice_name: str = "uk-UA-OstapNeural"):
-        # Повторне залізне очищення перед передачею в Edge-TTS
         final_clean = sanitize_text(text)
         try:
             cmd = [
@@ -147,7 +162,6 @@ class VideoEngine:
         w, h = 1020, 220
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        # Гарантуємо відсутність знаків на субтитрах
         up = sanitize_text(text).upper()
 
         font_size = 64
@@ -200,7 +214,6 @@ class VideoEngine:
                     except Exception as e:
                         print(f"[Media err] {e}")
 
-        # Синій стильний фон студії
         if not prepared_frames:
             bg_studio = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (12, 18, 30))
             d_s = ImageDraw.Draw(bg_studio)
@@ -208,7 +221,6 @@ class VideoEngine:
                 d_s.ellipse([(Config.VIDEO_WIDTH - r)//2, (Config.VIDEO_HEIGHT - r)//2, (Config.VIDEO_WIDTH + r)//2, (Config.VIDEO_HEIGHT + r)//2], outline=(20, 35, 60), width=3)
             prepared_frames.append(bg_studio)
 
-        # Верхній блок (безпечна зона TikTok Y=260)
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
 
@@ -220,7 +232,6 @@ class VideoEngine:
         t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
         t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
-        # Заголовок без жодних знаків
         clean_headline = sanitize_text(parsed["headline"])
         h_lines = wrap_text_lines(clean_headline, self.font_head, Config.VIDEO_WIDTH - 80)
         cur_hy = 345
@@ -229,7 +240,6 @@ class VideoEngine:
             cur_hy += 48
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -295,6 +305,12 @@ async def home():
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
         .res { margin-top: 25px; display: none; }
         video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
+        
+        .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
+        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
+        .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
+
         .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
         .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
         .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; }
@@ -310,7 +326,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">100% залізне видалення знаків оклику та перемикач дикторів</p>
+            <p style="color:#8E9BAE; font-size:14px;">З блоком хештегів під рекомендації та вибором голосу</p>
         </header>
 
         <div class="box">
@@ -334,6 +350,15 @@ async def home():
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
+                <!-- Блок індивідуального опису та хештегів -->
+                <div class="seo-box">
+                    <div class="seo-title">
+                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
+                        <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
+                    </div>
+                    <div class="seo-text" id="seoContent"></div>
+                </div>
+
                 <div class="social-title">🚀 Завантажити та опублікувати:</div>
                 <div class="social-grid">
                     <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
@@ -349,6 +374,8 @@ async def home():
 
     <script>
         let selectedFiles = [];
+        let currentSeoText = '';
+
         function showF(i) {
             if(i.files && i.files.length > 0) {
                 selectedFiles = Array.from(i.files);
@@ -381,6 +408,8 @@ async def home():
                 if(d.video_url) {
                     vid.src = d.video_url;
                     document.getElementById('dlBtn').href = d.video_url;
+                    currentSeoText = d.seo_desc;
+                    document.getElementById('seoContent').innerText = d.seo_desc;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -390,6 +419,10 @@ async def home():
                 btn.disabled = false;
                 st.style.display = 'none';
             }
+        }
+        function copySeo() {
+            navigator.clipboard.writeText(currentSeoText);
+            alert("✓ Опис і хештеги скопійовано! Вставляйте у підпис до відео.");
         }
     </script>
 </body>
@@ -417,7 +450,6 @@ async def api_generate(
                 saved_media.append(save_p)
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
-    # Текст віддається після жорсткої фільтрації
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
     sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
 
@@ -430,7 +462,10 @@ async def api_generate(
             try: p.unlink()
             except Exception: pass
 
-    return {"video_url": f"/videos/{out_file.name}"}
+    return {
+        "video_url": f"/videos/{out_file.name}",
+        "seo_desc": parsed["seo_desc"]
+    }
 
 @app.get("/videos/{filename}")
 async def get_vid(filename: str):
