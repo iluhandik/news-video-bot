@@ -9,12 +9,14 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
     CHANNEL_USERNAME = "@news_ukraine365"
+    VOICE_NAME = "uk-UA-OstapNeural"
+    VOICE_RATE = "+8%"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
     VIDEO_FPS = 25
@@ -26,7 +28,6 @@ Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 def sanitize_text(text: str) -> str:
-    """Тотальне очищення: видаляє будь-які символи, емодзі та знаки на початку і всередині тексту"""
     if not text:
         return ""
     text = re.sub(r"https?://\S+", " ", text)
@@ -49,24 +50,42 @@ def sanitize_text(text: str) -> str:
     text = re.sub(r"\.{2,}", ".", text)
     return re.sub(r"\s+", " ", text).strip()
 
+def has_word(text: str, words: List[str]) -> bool:
+    for w in words:
+        if re.search(r"\b" + re.escape(w), text):
+            return True
+    return False
+
 def generate_seo(headline: str, body: str) -> str:
     combined = (headline + " " + body).lower()
-    if any(k in combined for k in ["патрон", "пес", "собак", "цуцен"]):
-        tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини", "#позитив"]
-        q = "Як вам така чудова новина? Пишіть ваші привітання в коментарях 👇"
-    elif any(k in combined for k in ["землетрус", "поштовх", "вінниц", "київ"]):
-        tags = ["#землетрус", "#україна", "#вінниця", "#київ", "#новиниукраїни"]
-        q = "Ви відчули поштовхи у своєму місті? Пишіть, як у вас ситуація 👇"
-    elif any(k in combined for k in ["дорог", "авто", "тариф"]):
-        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#тарифи"]
-        q = "Чи готові ви платити такі гроші за проїзд новими трасами? 👇"
-    else:
-        tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Яка ваша думка щодо цієї новини? Обговорюємо в коментарях 👇"
 
-    rec_tags = ["#новини", "#україна", "#новинисьогодні", "#рек", "#рекомендації", "#тренди"]
-    all_tags = " ".join(tags + rec_tags)
-    return f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags}"
+    if has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік", "підстанц", "вимкнен", "включен", "напруг", "кіловат"]):
+        tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки", "#енергетика", "#новиниукраїни"]
+        q = "Як у вас зараз ситуація зі світлом? Чи дотримуються графіків у вашому місті? 👇"
+    elif has_word(combined, ["патрон", "пес", "собак", "цуцен", "кіт", "тварин"]):
+        tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини", "#позитив"]
+        q = "Як вам така чудова новина? Діліться реакціями в коментарях 👇"
+    elif has_word(combined, ["землетрус", "поштовх", "магнітуд", "сейсм"]):
+        tags = ["#землетрус", "#україна", "#надзвичайніновини", "#новиниукраїни", "#резонанс"]
+        q = "Ви відчули поштовхи у своєму місті? Пишіть, як у вас ситуація 👇"
+    elif has_word(combined, ["школяр", "третьокласник", "учень", "школ", "вчител", "булінг"]):
+        tags = ["#школа", "#батьки", "#діти", "#надзвичайніновини", "#поліція", "#резонанс"]
+        q = "Як вважаєте, яке покарання тут було б справедливим? Ваша думка в коментарях 👇"
+    elif has_word(combined, ["трас", "платні дороги", "автомобіл", "водій", "проїзд", "бензин", "штрафи пдр"]):
+        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дорогиукраїни", "#авто"]
+        q = "Чи готові ви платити такі гроші за якісні платні траси? Обговорюємо 👇"
+    elif has_word(combined, ["обстріл", "ракета", "шахед", "приліт", "ппо", "вибух"]):
+        tags = ["#обстріл", "#ппо", "#новиниукраїни", "#тривога", "#війна"]
+        q = "Бережіть себе та залишайтеся в укриттях під час тривог! 👇"
+    else:
+        tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс", "#українасьогодні"]
+        q = "Яка ваша думка щодо цієї ситуації? Обговорюємо в коментарях 👇"
+
+    rec_tags = ["#новини", "#україна", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
+    unique_tags = list(dict.fromkeys(tags + rec_tags))
+    all_tags_str = " ".join(unique_tags)
+
+    return f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{all_tags_str}"
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
     words = text.split()
@@ -88,17 +107,14 @@ def parse_post(raw_post: str) -> Dict[str, str]:
     clean = sanitize_text(raw_post)
     lines = [sanitize_text(l) for l in raw_post.split("\n") if len(sanitize_text(l)) > 3]
 
-    # СУВОРЕ УСУНЕННЯ ПОВТОРІВ
     if len(lines) > 1:
         headline = lines[0]
-        # Перевіряємо, чи наступні рядки не повторюють заголовок
         other_lines = [l for l in lines[1:] if l.lower() != headline.lower()]
         body = ". ".join(other_lines) if other_lines else ""
     else:
         headline = clean
         body = ""
 
-    # Формування озвучки: якщо тексту немає, озвучується ТІЛЬКИ заголовок
     cta = "Більше деталей дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
     if body and body.lower() != headline.lower():
         voice = f"{headline}. {body}. {cta}"
@@ -189,42 +205,47 @@ class VideoEngine:
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
 
-        prepared_frames = []
+        # Перевіряємо, чи є завантажене живе ВІДЕО
+        user_video_clip = None
+        prepared_images = []
+
         if media_files:
             for mf in media_files:
                 if mf.exists():
-                    try:
-                        ext = mf.suffix.lower()
-                        if ext in [".mp4", ".mov", ".webm", ".avi"]:
-                            vc = VideoFileClip(str(mf))
-                            f_np = vc.get_frame(1.0 if vc.duration > 1 else 0.0)
-                            im = Image.fromarray(f_np).convert("RGB")
-                            vc.close()
-                        else:
+                    ext = mf.suffix.lower()
+                    if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"] and user_video_clip is None:
+                        try:
+                            # Завантажуємо відео з автоматичним циклом
+                            user_video_clip = VideoFileClip(str(mf))
+                        except Exception as e:
+                            print(f"[Video load error] {e}")
+                    elif ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                        try:
                             im = Image.open(mf).convert("RGB")
+                            ow, oh = im.size
+                            tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+                            if ow / oh > tr:
+                                nw = int(oh * tr)
+                                c_box = ((ow - nw)//2, 0, (ow + nw)//2, oh)
+                            else:
+                                nh = int(ow / tr)
+                                c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
+                            im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+                            dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 110))
+                            im_crop.paste(dim, (0, 0), dim)
+                            prepared_images.append(im_crop)
+                        except Exception as e:
+                            print(f"[Image load error] {e}")
 
-                        ow, oh = im.size
-                        tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
-                        if ow / oh > tr:
-                            nw = int(oh * tr)
-                            c_box = ((ow - nw)//2, 0, (ow + nw)//2, oh)
-                        else:
-                            nh = int(ow / tr)
-                            c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
-                        im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
-                        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 110))
-                        im_crop.paste(dim, (0, 0), dim)
-                        prepared_frames.append(im_crop)
-                    except Exception as e:
-                        print(f"[Media err] {e}")
-
-        if not prepared_frames:
+        # Якщо немає ані відео, ані фото — студійний темний фон
+        if not user_video_clip and not prepared_images:
             bg_studio = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (12, 18, 30))
             d_s = ImageDraw.Draw(bg_studio)
             for r in range(800, 200, -80):
                 d_s.ellipse([(Config.VIDEO_WIDTH - r)//2, (Config.VIDEO_HEIGHT - r)//2, (Config.VIDEO_WIDTH + r)//2, (Config.VIDEO_HEIGHT + r)//2], outline=(20, 35, 60), width=3)
-            prepared_frames.append(bg_studio)
+            prepared_images.append(bg_studio)
 
+        # Верхній блок (безпечна зона TikTok Y=260)
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
 
@@ -244,6 +265,7 @@ class VideoEngine:
             cur_hy += 48
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
+        # Нижня плашка CTA
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
         c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
@@ -253,33 +275,63 @@ class VideoEngine:
         c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=self.font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=self.font_badge, fill=(42, 171, 238, 255))
 
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
-        num_frames = len(prepared_frames)
+        num_images = len(prepared_images)
 
         def make_frame(t):
-            frame_idx = int(t / 2.5) % num_frames
-            cur_bg = prepared_frames[frame_idx]
+            # 1. ЯКЩО Є ЖИВЕ ВІДЕО: РЕНДЕРИМО РУХОМИЙ КАДР
+            if user_video_clip:
+                # Отримуємо точний кадр для поточної секунди t (з зацикленням)
+                loop_t = t % user_video_clip.duration
+                frame_np = user_video_clip.get_frame(loop_t)
+                v_frame = Image.fromarray(frame_np).convert("RGB")
+                
+                # Створюємо динамічний розмитий фон на 9:16
+                small = v_frame.resize((270, 480))
+                bg_v = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR)
+                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 140))
+                bg_v.paste(dim, (0, 0), dim)
+                frame = bg_v.convert("RGBA")
 
-            zoom = 1.0 + 0.03 * ((t % 2.5) / 2.5)
-            zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
-            z_img = cur_bg.resize((zw, zh))
-            frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+                # Масштабуємо чітке живе відео по центру (ширина 1000px)
+                vw, vh = v_frame.size
+                target_w = 1000
+                target_h = int(vh * (target_w / vw))
+                sharp_v = v_frame.resize((target_w, target_h))
+                
+                # Вставляємо відео по центру
+                center_y = (Config.VIDEO_HEIGHT - target_h) // 2 - 20
+                frame.paste(sharp_v, ((Config.VIDEO_WIDTH - target_w)//2, center_y))
 
+            # 2. ЯКЩО ЗАВАНТАЖЕНО ФОТО: СЛАЙД-ШОУ З ЗУМОМ
+            else:
+                frame_idx = int(t / 2.5) % num_images
+                cur_bg = prepared_images[frame_idx]
+                zoom = 1.0 + 0.03 * ((t % 2.5) / 2.5)
+                zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
+                z_img = cur_bg.resize((zw, zh))
+                frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+
+            # Накладаємо шари
             frame.alpha_composite(top_bar, (0, 0))
 
+            # Субтитри по центру
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
                     if s:
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1080))
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1120))
                     break
 
-            frame.alpha_composite(cta_bar, (0, 1360))
+            # Нижня плашка CTA
+            frame.alpha_composite(cta_bar, (0, 1380))
             return np.array(frame.convert("RGB"))
 
         clip = VideoClip(make_frame, duration=duration).with_audio(audio_clip)
         clip.write_videofile(str(out_file), fps=Config.VIDEO_FPS, codec="libx264", audio_codec="aac", preset="ultrafast", threads=2, logger=None)
         audio_clip.close()
         clip.close()
+        if user_video_clip:
+            user_video_clip.close()
         return out_file
 
 app = FastAPI(title="News Studio Pro")
@@ -330,7 +382,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Без жодних подвійних повторів тексту на початку</p>
+            <p style="color:#8E9BAE; font-size:14px;">Повноцінний монтаж живого відео з посту без перетворення у фото</p>
         </header>
 
         <div class="box">
@@ -343,20 +395,20 @@ async def home():
             </div>
 
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📷 <b>Додайте фото або відео з новини</b> (можна кілька файлів)
+                📹 <b>Додайте ВІДЕО або фото з новини</b> (відео програватиметься в динаміці)
                 <input type="file" id="mFile" accept="video/*,image/*" multiple style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати чисте відео</button>
-            <div id="st">⏳ Монтаж відео без повторень... (15-20 сек)</div>
+            <div id="st">⏳ Монтаж живого відео та чиста озвучка... (25-35 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
                 <div class="seo-box">
                     <div class="seo-title">
-                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
+                        <span>🔥 Опис та точні хештеги під рекомендації:</span>
                         <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
                     </div>
                     <div class="seo-text" id="seoContent"></div>
@@ -438,7 +490,7 @@ async def api_generate(
     media_files: List[UploadFile] = File([])
 ):
     if not text or not text.strip():
-        text = "В Україні стався землетрус. Повідомляють про підземні поштовхи."
+        text = "Чому світло зникає одразу після включення. Енергетики пояснили причину відключень."
 
     parsed = parse_post(text)
 
