@@ -25,21 +25,34 @@ class Config:
 Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
-def strip_all_symbols(text: str) -> str:
-    """Залізне очищення: залишає ТІЛЬКИ українські/латинські літери, цифри, крапки та коми"""
-    # Прибираємо посилання
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"t\.me/\S+", "", text)
-    text = re.sub(r"@[a-zA-Z0-9_]+", "", text)
+def sanitize_text(text: str) -> str:
+    """Тотальне очищення: видаляє будь-які символи, емодзі та знаки на початку і всередині тексту"""
+    if not text:
+        return ""
+    # 1. Прибираємо посилання та юзернейми
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"t\.me/\S+", " ", text)
+    text = re.sub(r"@[a-zA-Z0-9_]+", " ", text)
+
+    # 2. Видаляємо всі емодзі
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+        "\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U000024C2-\U0001F251"
+        "\U0001F900-\U0001F9FF\U0001FA70-\U0001FAFF\U00002600-\U000026FF"
+        "]+", flags=re.UNICODE
+    )
+    text = emoji_pattern.sub(" ", text)
+
+    # 3. Видаляємо абсолютно всі спецсимволи і знаки пунктуації, через які диктор збивається
+    text = text.replace("!?", " ").replace("?!", " ").replace("!", " ").replace("?", " ")
+    text = re.sub(r"[⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"'()\[\]{}:;+/\\]", " ", text)
     
-    # Видаляємо всі знаки оклику, питання, блискавки, лапки на 100%
-    text = re.sub(r"[!?⚡🔥👉👇⚠️🚨✔✓➔➡•—–«»#*_=~`\"'()\[\]{}:;+/\\]", " ", text)
-    
-    # Замінюємо дефіси у словах типу 24-річний на пробіл
+    # 4. Виправляємо дефіси у словах (24-річний -> 24 річний)
     text = re.sub(r"(\d+)-([а-яА-ЯіїєґІЇЄҐ]+)", r"\1 \2", text)
-    text = re.sub(r"-", " ", text)
-    
-    # Прибираємо подвійні крапки
+    text = text.replace("-", " ")
+
+    # 5. Очищення крапок і зайвих пробілів
     text = re.sub(r"\.{2,}", ".", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -61,10 +74,10 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
     return lines
 
 def parse_post(raw_post: str) -> Dict[str, str]:
-    # Залізно очищений текст від усіх символів
-    clean = strip_all_symbols(raw_post)
+    # Зачищаємо текст на самому вході
+    clean = sanitize_text(raw_post)
     sentences = [s.strip() for s in re.split(r"[.\n]+", clean) if len(s.strip()) > 3]
-    
+
     if sentences:
         headline = sentences[0]
         body = ". ".join(sentences[1:]) if len(sentences) > 1 else sentences[0]
@@ -73,26 +86,25 @@ def parse_post(raw_post: str) -> Dict[str, str]:
         body = clean
 
     cta = "Більше деталей дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
-    # Голос отримує тільки чистий текст
     voice = f"{headline}. {body}. {cta}"
 
     return {
-        "headline": headline.upper(),
-        "body": body[:200],
-        "voiceover": strip_all_symbols(voice)
+        "headline": sanitize_text(headline).upper(),
+        "body": sanitize_text(body)[:220],
+        "voiceover": sanitize_text(voice)
     }
 
 class TTSEngine:
     @classmethod
     def generate(cls, text: str, out_p: Path, voice_name: str = "uk-UA-OstapNeural"):
-        # Гарантуємо відсутність знаків
-        safe_text = strip_all_symbols(text)
+        # Повторне залізне очищення перед передачею в Edge-TTS
+        final_clean = sanitize_text(text)
         try:
             cmd = [
                 "edge-tts",
                 "--voice", voice_name,
                 "--rate", "+6%",
-                "--text", safe_text,
+                "--text", final_clean,
                 "--write-media", str(out_p)
             ]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=25)
@@ -100,7 +112,7 @@ class TTSEngine:
             pass
 
         if not out_p.exists() or out_p.stat().st_size < 100:
-            dur = max(8.0, min(24.0, len(safe_text) / 14.0))
+            dur = max(8.0, min(24.0, len(final_clean) / 14.0))
             cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:beep_factor=4:duration={dur}", "-filter:a", "volume=0.2", str(out_p)]
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
@@ -117,8 +129,8 @@ class TTSEngine:
 
     @classmethod
     def chunks(cls, text: str, dur: float):
-        words = text.split()
-        chunks = [" ".join(words[i:i+2]) for i in range(0, len(words), 2)]
+        clean_words = sanitize_text(text).split()
+        chunks = [" ".join(clean_words[i:i+2]) for i in range(0, len(clean_words), 2)]
         t_chunk = dur / max(1, len(chunks))
         return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
 
@@ -135,7 +147,8 @@ class VideoEngine:
         w, h = 1020, 220
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
-        up = text.upper()
+        # Гарантуємо відсутність знаків на субтитрах
+        up = sanitize_text(text).upper()
 
         font_size = 64
         font = ImageFont.truetype(self.font_path, font_size)
@@ -187,7 +200,7 @@ class VideoEngine:
                     except Exception as e:
                         print(f"[Media err] {e}")
 
-        # Синій стильний фон новинної студії
+        # Синій стильний фон студії
         if not prepared_frames:
             bg_studio = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (12, 18, 30))
             d_s = ImageDraw.Draw(bg_studio)
@@ -195,10 +208,10 @@ class VideoEngine:
                 d_s.ellipse([(Config.VIDEO_WIDTH - r)//2, (Config.VIDEO_HEIGHT - r)//2, (Config.VIDEO_WIDTH + r)//2, (Config.VIDEO_HEIGHT + r)//2], outline=(20, 35, 60), width=3)
             prepared_frames.append(bg_studio)
 
-        # Верхній блок новини (безпечна зона Y=260)
+        # Верхній блок (безпечна зона TikTok Y=260)
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        
+
         t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
         t_draw.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
 
@@ -207,8 +220,9 @@ class VideoEngine:
         t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
         t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
-        # Заголовок БЕЗ знаків на початку
-        h_lines = wrap_text_lines(parsed["headline"], self.font_head, Config.VIDEO_WIDTH - 80)
+        # Заголовок без жодних знаків
+        clean_headline = sanitize_text(parsed["headline"])
+        h_lines = wrap_text_lines(clean_headline, self.font_head, Config.VIDEO_WIDTH - 80)
         cur_hy = 345
         for hl in h_lines[:2]:
             t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
@@ -296,7 +310,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">100% залізне видалення всіх знаків та вибір голосу диктора</p>
+            <p style="color:#8E9BAE; font-size:14px;">100% залізне видалення знаків оклику та перемикач дикторів</p>
         </header>
 
         <div class="box">
@@ -305,7 +319,7 @@ async def home():
             <div class="voice-select">
                 <span style="color:#8E9BAE; font-size:14px; margin-right:10px;">Голос диктора:</span>
                 <label class="voice-label"><input type="radio" name="voice" value="uk-UA-OstapNeural" checked> Чоловічий (Остап)</label>
-                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural"> Жіночий (Поліна - дуже м'який)</label>
+                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural"> Жіночий (Поліна — дуже приємний)</label>
             </div>
 
             <div class="drop" onclick="document.getElementById('mFile').click()">
@@ -315,7 +329,7 @@ async def home():
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати чисте відео</button>
-            <div id="st">⏳ Монтаж відео та чиста озвучка без знаків... (20-25 сек)</div>
+            <div id="st">⏳ Очищення тексту, запис чистого голосу та монтаж... (20-25 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -388,7 +402,7 @@ async def api_generate(
     media_files: List[UploadFile] = File([])
 ):
     if not text or not text.strip():
-        text = "В УКРАЇНІ СТАВСЯ ЗЕМЛЕТРУС. Повідомляють про підземні поштовхи."
+        text = "В Україні стався землетрус. Повідомляють про підземні поштовхи."
 
     parsed = parse_post(text)
 
@@ -403,7 +417,7 @@ async def api_generate(
                 saved_media.append(save_p)
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
-    # Чиста озвучка обраним голосом
+    # Текст віддається після жорсткої фільтрації
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
     sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
 
