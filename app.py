@@ -2,6 +2,7 @@ import os
 import re
 import time
 import subprocess
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -56,18 +57,15 @@ def has_word(text: str, words: List[str]) -> bool:
 
 def generate_seo(headline: str, body: str) -> str:
     combined = (headline + " " + body).lower()
-    if has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік", "підстанц"]):
-        tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки", "#енергетика"]
+    if has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл", "постражд"]):
+        tags = ["#чорноморськ", "#одеса", "#обстріл", "#новиниукраїни", "#війна"]
+        q = "Співчуття постраждалим та рідним загиблих. Бережіть себе! 👇"
+    elif has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік"]):
+        tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки"]
         q = "Як у вас зараз ситуація зі світлом? Чи дотримуються графіків у вашому місті? 👇"
-    elif has_word(combined, ["патрон", "пес", "собак", "цуцен", "кіт"]):
-        tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини", "#позитив"]
+    elif has_word(combined, ["патрон", "пес", "собак", "цуцен"]):
+        tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини"]
         q = "Як вам така чудова новина? Діліться реакціями в коментарях 👇"
-    elif has_word(combined, ["землетрус", "поштовх", "магнітуд"]):
-        tags = ["#землетрус", "#україна", "#надзвичайніновини", "#резонанс"]
-        q = "Ви відчули поштовхи у своєму місті? Пишіть у коментарях 👇"
-    elif has_word(combined, ["трас", "платні дороги", "автомобіл", "водій"]):
-        tags = ["#платнідороги", "#водіїукраїни", "#автоновини", "#дороги"]
-        q = "Чи готові ви платити такі гроші за нові траси? 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
         q = "Яка ваша думка щодо цієї ситуації? Обговорюємо в коментарях 👇"
@@ -142,22 +140,14 @@ class TTSEngine:
         except Exception:
             return 12.0
 
-    @classmethod
-    def chunks(cls, text: str, dur: float):
-        clean_words = sanitize_text(text).split()
-        chunks = [" ".join(clean_words[i:i+2]) for i in range(0, len(clean_words), 2)]
-        t_chunk = dur / max(1, len(chunks))
-        return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
-
-# Створення статичних плашок і субтитрів
-def create_overlays(parsed: Dict, sub_events: List[Dict], temp_dir: Path):
+def create_overlays(parsed: Dict, temp_dir: Path):
     font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
     font_badge = ImageFont.truetype(str(font_p), 26)
     font_head = ImageFont.truetype(str(font_p), 38)
     font_cta = ImageFont.truetype(str(font_p), 28)
     font_wm = ImageFont.truetype(str(font_p), 30)
 
-    # 1. Верхня плашка новини
+    # 1. Верхня плашка новини в безпечній зоні Y=260
     top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
     t_draw = ImageDraw.Draw(top_bar)
     t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
@@ -174,7 +164,7 @@ def create_overlays(parsed: Dict, sub_events: List[Dict], temp_dir: Path):
         t_draw.text((40, cur_hy), hl, font=font_head, fill=(255, 255, 255, 255))
         cur_hy += 48
     t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
-    top_p = temp_dir / "top_bar.png"
+    top_p = temp_dir / f"top_{int(time.time())}.png"
     top_bar.save(top_p)
 
     # 2. Нижня плашка CTA
@@ -185,12 +175,11 @@ def create_overlays(parsed: Dict, sub_events: List[Dict], temp_dir: Path):
     cw = c_draw.textlength(c_txt, font=font_cta)
     c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=font_cta, fill=(255, 255, 255, 255))
     c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=font_badge, fill=(42, 171, 238, 255))
-    cta_p = temp_dir / "cta_bar.png"
+    cta_p = temp_dir / f"cta_{int(time.time())}.png"
     cta_bar.save(cta_p)
 
     return top_p, cta_p
 
-# Швидкий та надійний рендеринг через нативний FFmpeg
 def build_video_ffmpeg(audio_p: Path, media_p: Optional[Path], top_p: Path, cta_p: Path, duration: float, out_p: Path):
     is_video = False
     if media_p and media_p.exists():
@@ -199,18 +188,18 @@ def build_video_ffmpeg(audio_p: Path, media_p: Optional[Path], top_p: Path, cta_
             is_video = True
 
     if is_video:
-        # Живе відео: масштаб на 9:16 + розмитий фон через split & boxblur
+        # Живе відео: масштаб на 9:16 + швидкий розмитий фон
         filter_complex = (
-            f"[1:v]loop=loop=-1:size=3000:start=0,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=brightness=-0.1[bg];"
-            f"[1:v]loop=loop=-1:size=3000:start=0,scale=1000:-1[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2-30[v1];"
+            f"[1:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,scale=1080:1920,boxblur=15:3[bg];"
+            f"[1:v]scale=1000:-1[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2-20[v1];"
             f"[v1][2:v]overlay=0:0[v2];"
             f"[v2][3:v]overlay=0:1360[vout]"
         )
         cmd = [
             "ffmpeg", "-y",
             "-i", str(audio_p),
-            "-i", str(media_p),
+            "-stream_loop", "-1", "-i", str(media_p),
             "-i", str(top_p),
             "-i", str(cta_p),
             "-filter_complex", filter_complex,
@@ -219,15 +208,16 @@ def build_video_ffmpeg(audio_p: Path, media_p: Optional[Path], top_p: Path, cta_
             "-t", str(duration),
             "-c:v", "libx264",
             "-preset", "ultrafast",
+            "-threads", "2",
             "-c:a", "aac",
             str(out_p)
         ]
     elif media_p and media_p.exists():
-        # Фото новини: розмитий фон на 9:16 + чітке фото по центру
+        # Фото
         filter_complex = (
-            f"[1:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=brightness=-0.1[bg];"
+            f"[1:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,scale=1080:1920,boxblur=15:3[bg];"
             f"[1:v]scale=1000:-1[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2-30[v1];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2-20[v1];"
             f"[v1][2:v]overlay=0:0[v2];"
             f"[v2][3:v]overlay=0:1360[vout]"
         )
@@ -243,11 +233,12 @@ def build_video_ffmpeg(audio_p: Path, media_p: Optional[Path], top_p: Path, cta_
             "-t", str(duration),
             "-c:v", "libx264",
             "-preset", "ultrafast",
+            "-threads", "2",
             "-c:a", "aac",
             str(out_p)
         ]
     else:
-        # Фон студії за замовчуванням
+        # Фон за замовчуванням
         cmd = [
             "ffmpeg", "-y",
             "-i", str(audio_p),
@@ -260,6 +251,7 @@ def build_video_ffmpeg(audio_p: Path, media_p: Optional[Path], top_p: Path, cta_
             "-t", str(duration),
             "-c:v", "libx264",
             "-preset", "ultrafast",
+            "-threads", "2",
             "-c:a", "aac",
             str(out_p)
         ]
@@ -314,7 +306,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Швидкий нативний монтаж без зависань 0:00</p>
+            <p style="color:#8E9BAE; font-size:14px;">Стабільне завантаження важких відеофайлів без 502 помилки</p>
         </header>
 
         <div class="box">
@@ -323,17 +315,17 @@ async def home():
             <div class="voice-select">
                 <span style="color:#8E9BAE; font-size:14px; margin-right:10px;">Голос диктора:</span>
                 <label class="voice-label"><input type="radio" name="voice" value="uk-UA-OstapNeural" checked> Чоловічий (Остап)</label>
-                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural"> Жіночий (Поліна — дуже приємний)</label>
+                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural"> Жіночий (Поліна)</label>
             </div>
 
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📹 <b>Додайте ВІДЕО або фото з новини</b> (живе відео гратиме в динаміці)
+                📹 <b>Додайте ВІДЕО або фото з новини</b> (надійна підтримка будь-яких назв файлів)
                 <input type="file" id="mFile" accept="video/*,image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати чисте відео</button>
-            <div id="st">⏳ Швидкий монтаж відео через FFmpeg... (15-20 сек)</div>
+            <div id="st">⏳ Монтаж живого відео... (15-20 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
@@ -389,7 +381,7 @@ async def home():
                 }
                 const res = await fetch('/api/generate', { method: 'POST', body: fd });
                 if (!res.ok) {
-                    throw new Error("Помилка сервера (код " + res.status + ")");
+                    throw new Error("Сервер не зміг обробити файл (код " + res.status + ")");
                 }
                 const d = await res.json();
                 if(d.video_url) {
@@ -422,26 +414,26 @@ async def api_generate(
     media_file: Optional[UploadFile] = File(None)
 ):
     if not text or not text.strip():
-        text = "В Україні стався землетрус. Повідомляють про підземні поштовхи."
+        text = "У Чорноморську троє загиблих через удар по ринку. Повідомили в ОВА."
 
     parsed = parse_post(text)
 
     saved_media = None
     if media_file and media_file.filename:
-        ext = Path(media_file.filename).suffix
-        saved_media = Config.TEMP_DIR / f"media_{int(time.time())}{ext}"
-        with open(saved_media, "wb") as f:
-            f.write(await media_file.read())
+        ext = Path(media_file.filename).suffix.lower()
+        if not ext:
+            ext = ".mp4"
+        # Безпечне збереження файлу на диск частинами
+        saved_media = Config.TEMP_DIR / f"upload_{int(time.time())}{ext}"
+        with open(saved_media, "wb") as buffer:
+            shutil.copyfileobj(media_file.file, buffer)
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
-    sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
 
-    # Генеруємо накладання
-    top_p, cta_p = create_overlays(parsed, sub_events, Config.TEMP_DIR)
-
+    top_p, cta_p = create_overlays(parsed, Config.TEMP_DIR)
     out_file = Config.OUTPUT_DIR / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    # Надійний та швидкий монтаж через FFmpeg
+
     build_video_ffmpeg(audio_path, saved_media, top_p, cta_p, duration, out_file)
 
     for p in [temp_audio, saved_media, top_p, cta_p]:
