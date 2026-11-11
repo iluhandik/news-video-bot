@@ -10,15 +10,17 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
     CHANNEL_USERNAME = "@news_ukraine365"
-    VOICE_NAME = "uk-UA-OstapNeural"
+    VOICE_NAME = "uk-UA-PolinaNeural"
     VOICE_RATE = "+8%"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
+    VIDEO_FPS = 25
     BASE_DIR = Path(__file__).resolve().parent
     OUTPUT_DIR = BASE_DIR / "output_videos"
     TEMP_DIR = BASE_DIR / "temp"
@@ -57,12 +59,12 @@ def has_word(text: str, words: List[str]) -> bool:
 
 def generate_seo(headline: str, body: str) -> str:
     combined = (headline + " " + body).lower()
-    if has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл", "постражд"]):
+    if has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл"]):
         tags = ["#чорноморськ", "#одеса", "#обстріл", "#новиниукраїни", "#війна"]
         q = "Співчуття постраждалим та рідним загиблих. Бережіть себе! 👇"
-    elif has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік"]):
+    elif has_word(combined, ["світл", "електр", "блекаут", "дтек"]):
         tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки"]
-        q = "Як у вас зараз ситуація зі світлом? Чи дотримуються графіків у вашому місті? 👇"
+        q = "Як у вас зараз ситуація зі світлом? Чи дотримуються графіків? 👇"
     elif has_word(combined, ["патрон", "пес", "собак", "цуцен"]):
         tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини"]
         q = "Як вам така чудова новина? Діліться реакціями в коментарях 👇"
@@ -117,7 +119,7 @@ def parse_post(raw_post: str) -> Dict[str, str]:
 
 class TTSEngine:
     @classmethod
-    def generate(cls, text: str, out_p: Path, voice_name: str = "uk-UA-OstapNeural"):
+    def generate(cls, text: str, out_p: Path, voice_name: str = "uk-UA-PolinaNeural"):
         safe = sanitize_text(text)
         try:
             cmd = ["edge-tts", "--voice", voice_name, "--rate", "+6%", "--text", safe, "--write-media", str(out_p)]
@@ -140,123 +142,167 @@ class TTSEngine:
         except Exception:
             return 12.0
 
-def create_overlays(parsed: Dict, temp_dir: Path):
-    font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
-    font_badge = ImageFont.truetype(str(font_p), 26)
-    font_head = ImageFont.truetype(str(font_p), 38)
-    font_cta = ImageFont.truetype(str(font_p), 28)
-    font_wm = ImageFont.truetype(str(font_p), 30)
+    @classmethod
+    def chunks(cls, text: str, dur: float):
+        clean_words = sanitize_text(text).split()
+        chunks = [" ".join(clean_words[i:i+2]) for i in range(0, len(clean_words), 2)]
+        t_chunk = dur / max(1, len(chunks))
+        return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
 
-    # 1. Верхня плашка новини в безпечній зоні Y=260
-    top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 520), (0, 0, 0, 0))
-    t_draw = ImageDraw.Draw(top_bar)
-    t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
-    t_draw.text((55, 272), "ТЕРМІНОВО", font=font_badge, fill=(255, 255, 255, 255))
+class VideoEngine:
+    def __init__(self):
+        font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+        self.font_path = str(font_p)
+        self.font_badge = ImageFont.truetype(self.font_path, 26)
+        self.font_head = ImageFont.truetype(self.font_path, 38)
+        self.font_cta = ImageFont.truetype(self.font_path, 28)
+        self.font_watermark = ImageFont.truetype(self.font_path, 30)
 
-    wm = Config.CHANNEL_DISPLAY_NAME
-    wm_w = int(t_draw.textlength(wm, font=font_wm))
-    t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
-    t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=font_wm, fill=(255, 255, 255, 255))
+    def _render_sub(self, text: str) -> Image.Image:
+        w, h = 1020, 220
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        up = sanitize_text(text).upper()
 
-    h_lines = wrap_text_lines(parsed["headline"], font_head, Config.VIDEO_WIDTH - 80)
-    cur_hy = 345
-    for hl in h_lines[:2]:
-        t_draw.text((40, cur_hy), hl, font=font_head, fill=(255, 255, 255, 255))
-        cur_hy += 48
-    t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
-    top_p = temp_dir / f"top_{int(time.time())}.png"
-    top_bar.save(top_p)
+        font_size = 64
+        font = ImageFont.truetype(self.font_path, font_size)
+        while draw.textlength(up, font=font) > (w - 60) and font_size > 34:
+            font_size -= 4
+            font = ImageFont.truetype(self.font_path, font_size)
 
-    # 2. Нижня плашка CTA
-    cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
-    c_draw = ImageDraw.Draw(cta_bar)
-    c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
-    c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
-    cw = c_draw.textlength(c_txt, font=font_cta)
-    c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=font_cta, fill=(255, 255, 255, 255))
-    c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=font_badge, fill=(42, 171, 238, 255))
-    cta_p = temp_dir / f"cta_{int(time.time())}.png"
-    cta_bar.save(cta_p)
+        tw = draw.textlength(up, font=font)
+        tx = max(20, (w - tw) // 2)
+        ty = (h - font_size) // 2
 
-    return top_p, cta_p
+        # Чорний контур 6px
+        for dx in range(-6, 7):
+            for dy in range(-6, 7):
+                if dx*dx + dy*dy <= 36:
+                    draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
+        # Неоновий жовтий
+        draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
+        return img
 
-def build_video_ffmpeg(audio_p: Path, media_p: Optional[Path], top_p: Path, cta_p: Path, duration: float, out_p: Path):
-    is_video = False
-    if media_p and media_p.exists():
-        ext = media_p.suffix.lower()
-        if ext in [".mp4", ".mov", ".avi", ".webm", ".mkv"]:
-            is_video = True
+    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_path: Optional[Path] = None):
+        audio_clip = AudioFileClip(str(audio_path))
+        duration = audio_clip.duration
 
-    if is_video:
-        # Живе відео: масштаб на 9:16 + швидкий розмитий фон
-        filter_complex = (
-            f"[1:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,scale=1080:1920,boxblur=15:3[bg];"
-            f"[1:v]scale=1000:-1[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2-20[v1];"
-            f"[v1][2:v]overlay=0:0[v2];"
-            f"[v2][3:v]overlay=0:1360[vout]"
-        )
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(audio_p),
-            "-stream_loop", "-1", "-i", str(media_p),
-            "-i", str(top_p),
-            "-i", str(cta_p),
-            "-filter_complex", filter_complex,
-            "-map", "[vout]",
-            "-map", "0:a",
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-threads", "2",
-            "-c:a", "aac",
-            str(out_p)
-        ]
-    elif media_p and media_p.exists():
-        # Фото
-        filter_complex = (
-            f"[1:v]scale=540:960:force_original_aspect_ratio=increase,crop=540:960,scale=1080:1920,boxblur=15:3[bg];"
-            f"[1:v]scale=1000:-1[fg];"
-            f"[bg][fg]overlay=(W-w)/2:(H-h)/2-20[v1];"
-            f"[v1][2:v]overlay=0:0[v2];"
-            f"[v2][3:v]overlay=0:1360[vout]"
-        )
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(audio_p),
-            "-loop", "1", "-i", str(media_p),
-            "-i", str(top_p),
-            "-i", str(cta_p),
-            "-filter_complex", filter_complex,
-            "-map", "[vout]",
-            "-map", "0:a",
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-threads", "2",
-            "-c:a", "aac",
-            str(out_p)
-        ]
-    else:
-        # Фон за замовчуванням
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(audio_p),
-            "-f", "lavfi", "-i", f"color=c=0x0E1420:s=1080x1920:d={duration}",
-            "-i", str(top_p),
-            "-i", str(cta_p),
-            "-filter_complex", "[1:v][2:v]overlay=0:0[v1];[v1][3:v]overlay=0:1360[vout]",
-            "-map", "[vout]",
-            "-map", "0:a",
-            "-t", str(duration),
-            "-c:v", "libx264",
-            "-preset", "ultrafast",
-            "-threads", "2",
-            "-c:a", "aac",
-            str(out_p)
-        ]
+        user_video_clip = None
+        prepared_img = None
 
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if media_path and media_path.exists():
+            ext = media_path.suffix.lower()
+            if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"]:
+                try:
+                    user_video_clip = VideoFileClip(str(media_path))
+                except Exception as e:
+                    user_video_clip = None
+            else:
+                try:
+                    im = Image.open(media_path).convert("RGB")
+                    ow, oh = im.size
+                    tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+                    if ow / oh > tr:
+                        nw = int(oh * tr)
+                        c_box = ((ow - nw)//2, 0, (ow + nw)//2, oh)
+                    else:
+                        nh = int(ow / tr)
+                        c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
+                    im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 110))
+                    im_crop.paste(dim, (0, 0), dim)
+                    prepared_img = im_crop
+                except Exception:
+                    prepared_img = None
+
+        if not user_video_clip and not prepared_img:
+            bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
+            prepared_img = bg_default
+
+        # 1. Верхня плашка новини з затемненням проти перекриття логотипами
+        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 540), (0, 0, 0, 0))
+        t_draw = ImageDraw.Draw(top_bar)
+        
+        # Напівпрозоре темне підсвічування під заголовком
+        t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 180))
+
+        t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
+        t_draw.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+
+        wm = Config.CHANNEL_DISPLAY_NAME
+        wm_w = int(t_draw.textlength(wm, font=self.font_watermark))
+        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
+        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
+
+        clean_headline = sanitize_text(parsed["headline"])
+        h_lines = wrap_text_lines(clean_headline, self.font_head, Config.VIDEO_WIDTH - 80)
+        cur_hy = 345
+        for hl in h_lines[:2]:
+            t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
+            cur_hy += 48
+        t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
+
+        # 2. Нижня плашка CTA
+        cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
+        c_draw = ImageDraw.Draw(cta_bar)
+        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
+        c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
+        cw = c_draw.textlength(c_txt, font=self.font_cta)
+        c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
+        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=self.font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=self.font_badge, fill=(42, 171, 238, 255))
+
+        # Попередній рендеринг субтитрів
+        sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
+
+        def make_frame(t):
+            # 1. Фоновий шар (живе відео або фото)
+            if user_video_clip:
+                loop_t = t % user_video_clip.duration
+                raw_frame = user_video_clip.get_frame(loop_t)
+                v_img = Image.fromarray(raw_frame)
+                
+                # Розмитий задній план 9:16
+                small = v_img.resize((270, 480))
+                bg_v = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR)
+                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
+                bg_v.paste(dim, (0, 0), dim)
+                frame = bg_v.convert("RGBA")
+
+                # Чітке живе відео по центру
+                vw, vh = v_img.size
+                target_w = 1000
+                target_h = int(vh * (target_w / vw))
+                sharp_v = v_img.resize((target_w, target_h))
+                center_y = (Config.VIDEO_HEIGHT - target_h) // 2 - 20
+                frame.paste(sharp_v, ((Config.VIDEO_WIDTH - target_w)//2, center_y))
+            else:
+                zoom = 1.0 + 0.03 * (t / max(1.0, duration))
+                zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
+                z_img = prepared_img.resize((zw, zh))
+                frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+
+            # 2. Накладаємо верхній блок
+            frame.alpha_composite(top_bar, (0, 0))
+
+            # 3. НАКЛАДАЄМО ВЕЛИКІ ДИНАМІЧНІ СУБТИТРИ ПО ЦЕНТРУ
+            for e in sub_events:
+                if e["start"] <= t <= e["end"]:
+                    s = sub_cache.get(e["text"])
+                    if s:
+                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1080))
+                    break
+
+            # 4. Нижня плашка CTA
+            frame.alpha_composite(cta_bar, (0, 1360))
+            return np.array(frame.convert("RGB"))
+
+        clip = VideoClip(make_frame, duration=duration).with_audio(audio_clip)
+        clip.write_videofile(str(out_file), fps=Config.VIDEO_FPS, codec="libx264", audio_codec="aac", preset="ultrafast", threads=2, logger=None)
+        audio_clip.close()
+        clip.close()
+        if user_video_clip:
+            user_video_clip.close()
+        return out_file
 
 app = FastAPI(title="News Studio Pro")
 
@@ -306,7 +352,7 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Стабільне завантаження важких відеофайлів без 502 помилки</p>
+            <p style="color:#8E9BAE; font-size:14px;">Повноцінний монтаж живого відео з великими динамічними субтитрами</p>
         </header>
 
         <div class="box">
@@ -314,25 +360,25 @@ async def home():
             
             <div class="voice-select">
                 <span style="color:#8E9BAE; font-size:14px; margin-right:10px;">Голос диктора:</span>
-                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-OstapNeural" checked> Чоловічий (Остап)</label>
-                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural"> Жіночий (Поліна)</label>
+                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural" checked> Жіночий (Поліна — дуже м'який)</label>
+                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-OstapNeural"> Чоловічий (Остап)</label>
             </div>
 
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📹 <b>Додайте ВІДЕО або фото з новини</b> (надійна підтримка будь-яких назв файлів)
+                📹 <b>Додайте ВІДЕО або фото з новини</b> (живе відео програватиметься в динаміці)
                 <input type="file" id="mFile" accept="video/*,image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати чисте відео</button>
-            <div id="st">⏳ Монтаж живого відео... (15-20 сек)</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
+            <div id="st">⏳ Монтаж живого відео, накладання динамічних субтитрів... (20-30 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
                 <div class="seo-box">
                     <div class="seo-title">
-                        <span>🔥 Опис та прораховані хештеги під рекомендації:</span>
+                        <span>🔥 Опис та точні хештеги під рекомендації:</span>
                         <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
                     </div>
                     <div class="seo-text" id="seoContent"></div>
@@ -410,7 +456,7 @@ async def home():
 @app.post("/api/generate")
 async def api_generate(
     text: Optional[str] = Form(None),
-    voice: Optional[str] = Form("uk-UA-OstapNeural"),
+    voice: Optional[str] = Form("uk-UA-PolinaNeural"),
     media_file: Optional[UploadFile] = File(None)
 ):
     if not text or not text.strip():
@@ -423,20 +469,19 @@ async def api_generate(
         ext = Path(media_file.filename).suffix.lower()
         if not ext:
             ext = ".mp4"
-        # Безпечне збереження файлу на диск частинами
         saved_media = Config.TEMP_DIR / f"upload_{int(time.time())}{ext}"
         with open(saved_media, "wb") as buffer:
             shutil.copyfileobj(media_file.file, buffer)
 
     temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
+    sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
 
-    top_p, cta_p = create_overlays(parsed, Config.TEMP_DIR)
+    engine = VideoEngine()
     out_file = Config.OUTPUT_DIR / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    engine.render(parsed, audio_path, sub_events, out_file, saved_media)
 
-    build_video_ffmpeg(audio_path, saved_media, top_p, cta_p, duration, out_file)
-
-    for p in [temp_audio, saved_media, top_p, cta_p]:
+    for p in [temp_audio, saved_media]:
         if p and p.exists():
             try: p.unlink()
             except Exception: pass
