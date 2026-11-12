@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
@@ -57,24 +57,27 @@ def has_word(text: str, words: List[str]) -> bool:
             return True
     return False
 
-def generate_seo(headline: str, body: str) -> str:
+def generate_seo(headline: str, body: str, mode: str) -> str:
     combined = (headline + " " + body).lower()
     if has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл"]):
         tags = ["#чорноморськ", "#одеса", "#обстріл", "#новиниукраїни", "#війна"]
-        q = "Співчуття постраждалим та рідним загиблих. Бережіть себе! 👇"
-    elif has_word(combined, ["світл", "електр", "блекаут", "дтек"]):
+        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇" if mode == "bait" else "Співчуття постраждалим та рідним. Бережіть себе! 👇"
+    elif has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік"]):
         tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки"]
-        q = "Як у вас зараз ситуація зі світлом? Чи дотримуються графіків? 👇"
+        q = "Повний графік по кожному району вже в нашому ТГ в шапці профілю! 👇" if mode == "bait" else "Як у вас зараз зі світлом? Пишіть у коментарях 👇"
     elif has_word(combined, ["патрон", "пес", "собак", "цуцен"]):
         tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини"]
-        q = "Як вам така чудова новина? Діліться реакціями в коментарях 👇"
+        q = "Усі фото та відео вже в нашому Телеграм каналі в шапці профілю 👇"
+    elif has_word(combined, ["землетрус", "поштовх", "магнітуд"]):
+        tags = ["#землетрус", "#україна", "#надзвичайніновини", "#резонанс"]
+        q = "Мапа поштовхів та всі деталі вже в нашому ТГ в шапці профілю 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Яка ваша думка щодо цієї ситуації? Обговорюємо в коментарях 👇"
+        q = "Повні кадри та деталі, які видаляє ТікТок, вже у нашому ТГ в шапці профілю 👇" if mode == "bait" else "Яка ваша думка щодо цієї новини? Обговорюємо в коментарях 👇"
 
     rec_tags = ["#новини", "#україна", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
     unique_tags = list(dict.fromkeys(tags + rec_tags))
-    return f"{headline}!\n\n{q}\n\nПовні подробиці дивіться за посиланням у шапці профілю!\n\n{' '.join(unique_tags)}"
+    return f"{headline}!\n\n{q}\n\n🔎 Знайти в Telegram: NEWS УКРАЇНА 365\n\n{' '.join(unique_tags)}"
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
     words = text.split()
@@ -92,29 +95,47 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
     if cur: lines.append(" ".join(cur))
     return lines
 
-def parse_post(raw_post: str) -> Dict[str, str]:
+def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
     clean = sanitize_text(raw_post)
     lines = [sanitize_text(l) for l in raw_post.split("\n") if len(sanitize_text(l)) > 3]
 
     if len(lines) > 1:
         headline = lines[0]
         other_lines = [l for l in lines[1:] if l.lower() != headline.lower()]
-        body = ". ".join(other_lines) if other_lines else ""
+        full_body = ". ".join(other_lines) if other_lines else ""
     else:
         headline = clean
-        body = ""
+        full_body = ""
 
-    cta = "Більше деталей дивіться в нашому Телеграм каналі за посиланням у шапці профілю."
-    if body and body.lower() != headline.lower():
-        voice = f"{headline}. {body}. {cta}"
+    # РЕЖИМ 1: Жорсткий перелив у ТГ (тільки інтрига, без розкриття суті)
+    if mode == "bait":
+        teaser = other_lines[0] if (len(lines) > 1 and other_lines) else ""
+        cta = (
+            "Але повне відео без цензури, точний список та всі подробиці, "
+            "які блокує Тік Ток, ми вже виклали в нашому Телеграм каналі Ньюз Україна 365. "
+            "Шукайте посилання в шапці профілю!"
+        )
+        if teaser and teaser.lower() != headline.lower():
+            voice = f"{headline}. {teaser}. {cta}"
+        else:
+            voice = f"{headline}. {cta}"
+        display_body = teaser
+
+    # РЕЖИМ 2: Повна інформація (як раніше)
     else:
-        voice = f"{headline}. {cta}"
+        cta = "Більше деталей дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю."
+        if full_body and full_body.lower() != headline.lower():
+            voice = f"{headline}. {full_body}. {cta}"
+        else:
+            voice = f"{headline}. {cta}"
+        display_body = full_body
 
     return {
         "headline": sanitize_text(headline).upper(),
-        "body": sanitize_text(body)[:220],
+        "body": sanitize_text(display_body)[:220],
         "voiceover": sanitize_text(voice),
-        "seo_desc": generate_seo(headline, body if body else headline)
+        "seo_desc": generate_seo(headline, display_body if display_body else headline, mode),
+        "mode": mode
     }
 
 class TTSEngine:
@@ -174,12 +195,10 @@ class VideoEngine:
         tx = max(20, (w - tw) // 2)
         ty = (h - font_size) // 2
 
-        # Чорний контур 6px
         for dx in range(-6, 7):
             for dy in range(-6, 7):
                 if dx*dx + dy*dy <= 36:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        # Неоновий жовтий
         draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
         return img
 
@@ -195,7 +214,7 @@ class VideoEngine:
             if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"]:
                 try:
                     user_video_clip = VideoFileClip(str(media_path))
-                except Exception as e:
+                except Exception:
                     user_video_clip = None
             else:
                 try:
@@ -219,11 +238,9 @@ class VideoEngine:
             bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
             prepared_img = bg_default
 
-        # 1. Верхня плашка новини з затемненням проти перекриття логотипами
+        # 1. Верхня плашка
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 540), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        
-        # Напівпрозоре темне підсвічування під заголовком
         t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 180))
 
         t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
@@ -242,33 +259,38 @@ class VideoEngine:
             cur_hy += 48
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # 2. Нижня плашка CTA
+        # 2. Нижня плашка CTA (залежить від обраного режиму!)
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
-        c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
-        c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
+
+        if parsed["mode"] == "bait":
+            c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(200, 25, 35, 245), outline=(255, 215, 0, 255), width=3)
+            c_txt = "ПОВНЕ ВІДЕО БЕЗ ЦЕНЗУРИ В ШАПЦІ ПРОФІЛЮ ➔"
+            sub_col = (255, 245, 180, 255)
+        else:
+            c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
+            c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
+            sub_col = (42, 171, 238, 255)
+
         cw = c_draw.textlength(c_txt, font=self.font_cta)
         c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
-        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(Config.CHANNEL_DISPLAY_NAME, font=self.font_badge))//2, 88), Config.CHANNEL_DISPLAY_NAME, font=self.font_badge, fill=(42, 171, 238, 255))
+        sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME}"
+        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(sub_t, font=self.font_badge))//2, 88), sub_t, font=self.font_badge, fill=sub_col)
 
-        # Попередній рендеринг субтитрів
         sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
 
         def make_frame(t):
-            # 1. Фоновий шар (живе відео або фото)
             if user_video_clip:
                 loop_t = t % user_video_clip.duration
                 raw_frame = user_video_clip.get_frame(loop_t)
                 v_img = Image.fromarray(raw_frame)
                 
-                # Розмитий задній план 9:16
                 small = v_img.resize((270, 480))
                 bg_v = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR)
                 dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
                 bg_v.paste(dim, (0, 0), dim)
                 frame = bg_v.convert("RGBA")
 
-                # Чітке живе відео по центру
                 vw, vh = v_img.size
                 target_w = 1000
                 target_h = int(vh * (target_w / vw))
@@ -281,10 +303,8 @@ class VideoEngine:
                 z_img = prepared_img.resize((zw, zh))
                 frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
 
-            # 2. Накладаємо верхній блок
             frame.alpha_composite(top_bar, (0, 0))
 
-            # 3. НАКЛАДАЄМО ВЕЛИКІ ДИНАМІЧНІ СУБТИТРИ ПО ЦЕНТРУ
             for e in sub_events:
                 if e["start"] <= t <= e["end"]:
                     s = sub_cache.get(e["text"])
@@ -292,7 +312,6 @@ class VideoEngine:
                         frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1080))
                     break
 
-            # 4. Нижня плашка CTA
             frame.alpha_composite(cta_bar, (0, 1360))
             return np.array(frame.convert("RGB"))
 
@@ -316,7 +335,7 @@ async def home():
     <title>News Studio Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; }
+        :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; --red: #FF3B30; }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
         body { background: var(--bg); color: #fff; min-height: 100vh; padding: 25px 15px; }
         .wrap { max-width: 850px; margin: 0 auto; }
@@ -324,8 +343,8 @@ async def home():
         h1 { font-size: 26px; font-weight: 800; }
         .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
         textarea { width: 100%; height: 140px; background: #0A0E17; border: 1px solid #232E42; border-radius: 12px; padding: 14px; color: #fff; font-size: 15px; outline: none; margin-bottom: 12px; resize: vertical; }
-        .voice-select { display: flex; gap: 15px; margin-bottom: 15px; background: #0A0E17; padding: 12px; border-radius: 10px; border: 1px solid #232E42; }
-        .voice-label { font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .select-row { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 14px; background: #0A0E17; padding: 12px 16px; border-radius: 12px; border: 1px solid #232E42; align-items: center; }
+        .select-label { font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; }
         .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
         .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
         #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
@@ -352,16 +371,24 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Повноцінний монтаж живого відео з великими динамічними субтитрами</p>
+            <p style="color:#8E9BAE; font-size:14px;">Два режими: Повна новина або Жорсткий перелив у ТГ</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
-            <div class="voice-select">
-                <span style="color:#8E9BAE; font-size:14px; margin-right:10px;">Голос диктора:</span>
-                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural" checked> Жіночий (Поліна — дуже м'який)</label>
-                <label class="voice-label"><input type="radio" name="voice" value="uk-UA-OstapNeural"> Чоловічий (Остап)</label>
+            <!-- Перемикач режиму: Повний або Перелив -->
+            <div class="select-row" style="border-color: rgba(255, 59, 48, 0.4);">
+                <span style="color:#FFD233; font-size:14px;">Формат ролика:</span>
+                <label class="select-label"><input type="radio" name="mode" value="full" checked> 📰 Повна новина (вся інфа в ролику)</label>
+                <label class="select-label" style="color:#FF6B6B;"><input type="radio" name="mode" value="bait"> 🔥 100% Перелив у ТГ (інтрига + заклик)</label>
+            </div>
+
+            <!-- Перемикач голосу -->
+            <div class="select-row">
+                <span style="color:#8E9BAE; font-size:14px;">Голос диктора:</span>
+                <label class="select-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural" checked> Жіночий (Поліна)</label>
+                <label class="select-label"><input type="radio" name="voice" value="uk-UA-OstapNeural"> Чоловічий (Остап)</label>
             </div>
 
             <div class="drop" onclick="document.getElementById('mFile').click()">
@@ -370,15 +397,15 @@ async def home():
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати вірусне відео</button>
-            <div id="st">⏳ Монтаж живого відео, накладання динамічних субтитрів... (20-30 сек)</div>
+            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
+            <div id="st">⏳ Монтаж відео та озвучка... (20-30 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
                 <div class="seo-box">
                     <div class="seo-title">
-                        <span>🔥 Опис та точні хештеги під рекомендації:</span>
+                        <span>🔥 Опис та хештеги під рекомендації:</span>
                         <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
                     </div>
                     <div class="seo-text" id="seoContent"></div>
@@ -414,6 +441,7 @@ async def home():
             const vid = document.getElementById('vPlay');
             const txt = document.getElementById('pTxt').value;
             const voice = document.querySelector('input[name="voice"]:checked').value;
+            const mode = document.querySelector('input[name="mode"]:checked').value;
 
             btn.disabled = true;
             st.style.display = 'block';
@@ -422,6 +450,7 @@ async def home():
                 const fd = new FormData();
                 fd.append('text', txt);
                 fd.append('voice', voice);
+                fd.append('mode', mode);
                 if(selectedFile) {
                     fd.append('media_file', selectedFile);
                 }
@@ -457,12 +486,13 @@ async def home():
 async def api_generate(
     text: Optional[str] = Form(None),
     voice: Optional[str] = Form("uk-UA-PolinaNeural"),
+    mode: Optional[str] = Form("full"),
     media_file: Optional[UploadFile] = File(None)
 ):
     if not text or not text.strip():
         text = "У Чорноморську троє загиблих через удар по ринку. Повідомили в ОВА."
 
-    parsed = parse_post(text)
+    parsed = parse_post(text, mode)
 
     saved_media = None
     if media_file and media_file.filename:
