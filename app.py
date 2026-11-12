@@ -15,6 +15,7 @@ from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
+    CHANNEL_BAIT_WATERMARK = "NEWS УКРАЇНА 365 | ЕКСКЛЮЗИВ"
     CHANNEL_USERNAME = "@kropivnit"
     VOICE_NAME = "uk-UA-PolinaNeural"
     VOICE_RATE = "+8%"
@@ -58,7 +59,6 @@ def has_word(text: str, words: List[str]) -> bool:
     return False
 
 def get_adaptive_cta(combined_text: str, mode: str) -> Dict[str, str]:
-    """Підбирає логічний заклик та готовий коментар під КОНКРЕТНУ тему новини"""
     t = combined_text.lower()
 
     if has_word(t, ["світл", "електр", "блекаут", "дтек", "графік"]):
@@ -110,15 +110,17 @@ def generate_seo(headline: str, body: str, mode: str) -> str:
         q = "Що думаєте про такі заяви? Пишіть у коментарях 👇"
     elif has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл"]):
         tags = ["#чорноморськ", "#одеса", "#обстріл", "#новиниукраїни", "#війна"]
-        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇"
+        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇" if mode == "bait" else "Співчуття постраждалим та рідним. Бережіть себе! 👇"
     elif has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік"]):
         tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки"]
-        q = "Повний графік по кожному району вже в нашому ТГ в шапці профілю! 👇"
+        q = "Повний графік по кожному району вже в нашому ТГ в шапці профілю! 👇" if mode == "bait" else "Як у вас зараз зі світлом? Пишіть у коментарях 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Повні кадри та деталі, які видаляє ТікТок, вже у нашому ТГ в шапці профілю 👇"
+        q = "Повні кадри та деталі, які видаляє ТікТок, вже у нашому ТГ в шапці профілю 👇" if mode == "bait" else "Яка ваша думка щодо цієї новини? Обговорюємо в коментарях 👇"
 
     rec_tags = ["#новини", "#україна", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
+    if mode == "bait":
+        rec_tags.append("#ексклюзив")
     unique_tags = list(dict.fromkeys(tags + rec_tags))
     return f"{headline}!\n\n{q}\n\n🔎 Знайти в Telegram: NEWS УКРАЇНА 365\n\n{' '.join(unique_tags)}"
 
@@ -148,6 +150,7 @@ def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
         full_body = ". ".join(other_lines) if other_lines else ""
     else:
         headline = clean
+        other_lines = []
         full_body = ""
 
     combined_for_cta = f"{headline} {full_body}"
@@ -155,7 +158,7 @@ def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
     cta = adaptive["voice_cta"]
 
     if mode == "bait":
-        teaser = other_lines[0] if (len(lines) > 1 and other_lines) else ""
+        teaser = other_lines[0] if other_lines else ""
         if teaser and teaser.lower() != headline.lower():
             voice = f"{headline}. {teaser}. {cta}"
         else:
@@ -204,7 +207,6 @@ class TTSEngine:
 
     @classmethod
     def chunks(cls, text: str, dur: float):
-        # Автоматично замінюємо транскрипцію 'ньюз' назад на 'NEWS' у субтитрах!
         clean_words = sanitize_text(text).split()
         display_words = ["NEWS" if w.lower() == "ньюз" else w for w in clean_words]
 
@@ -219,9 +221,9 @@ class VideoEngine:
         self.font_badge = ImageFont.truetype(self.font_path, 26)
         self.font_head = ImageFont.truetype(self.font_path, 38)
         self.font_cta = ImageFont.truetype(self.font_path, 28)
-        self.font_watermark = ImageFont.truetype(self.font_path, 30)
+        self.font_watermark = ImageFont.truetype(self.font_path, 26)
 
-    def _render_sub(self, text: str) -> Image.Image:
+    def _render_sub(self, text: str, is_bait: bool = False) -> Image.Image:
         w, h = 1020, 220
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -241,12 +243,14 @@ class VideoEngine:
             for dy in range(-6, 7):
                 if dx*dx + dy*dy <= 36:
                     draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        draw.text((tx, ty), up, font=font, fill=(255, 220, 10, 255))
+        sub_color = (255, 255, 255, 255) if is_bait else (255, 220, 10, 255)
+        draw.text((tx, ty), up, font=font, fill=sub_color)
         return img
 
     def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_path: Optional[Path] = None):
         audio_clip = AudioFileClip(str(audio_path))
         duration = audio_clip.duration
+        is_bait = (parsed["mode"] == "bait")
 
         user_video_clip = None
         prepared_img = None
@@ -270,27 +274,35 @@ class VideoEngine:
                         nh = int(ow / tr)
                         c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
                     im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
-                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 110))
+                    dim_alpha = 135 if is_bait else 110
+                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, dim_alpha))
                     im_crop.paste(dim, (0, 0), dim)
                     prepared_img = im_crop
                 except Exception:
                     prepared_img = None
 
         if not user_video_clip and not prepared_img:
-            bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
-            prepared_img = bg_default
+            bg_color = (22, 14, 24) if is_bait else (16, 22, 34)
+            prepared_img = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), bg_color)
 
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 540), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
-        t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 180))
+        t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 185))
 
-        t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
-        t_draw.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+        if is_bait:
+            t_draw.rounded_rectangle([40, 260, 300, 320], radius=12, fill=(255, 165, 0, 255))
+            t_draw.text((55, 272), "ЕКСКЛЮЗИВ", font=self.font_badge, fill=(0, 0, 0, 255))
+            wm = Config.CHANNEL_BAIT_WATERMARK
+            wm_fill = (200, 30, 45, 240)
+        else:
+            t_draw.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
+            t_draw.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+            wm = Config.CHANNEL_DISPLAY_NAME
+            wm_fill = (120, 50, 210, 240)
 
-        wm = Config.CHANNEL_DISPLAY_NAME
         wm_w = int(t_draw.textlength(wm, font=self.font_watermark))
-        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
-        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 272), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
+        t_draw.rounded_rectangle([Config.VIDEO_WIDTH - wm_w - 70, 260, Config.VIDEO_WIDTH - 40, 320], radius=12, fill=wm_fill, outline=(255, 255, 255, 200), width=2)
+        t_draw.text((Config.VIDEO_WIDTH - wm_w - 55, 274), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
         clean_headline = sanitize_text(parsed["headline"])
         h_lines = wrap_text_lines(clean_headline, self.font_head, Config.VIDEO_WIDTH - 80)
@@ -298,12 +310,13 @@ class VideoEngine:
         for hl in h_lines[:2]:
             t_draw.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
             cur_hy += 48
-        t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
+        line_col = (255, 80, 80, 240) if is_bait else (255, 215, 0, 240)
+        t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=line_col, width=3)
 
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
 
-        if parsed["mode"] == "bait":
+        if is_bait:
             c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(200, 25, 35, 245), outline=(255, 215, 0, 255), width=3)
             c_txt = "ПОВНЕ ВІДЕО БЕЗ ЦЕНЗУРИ В ШАПЦІ ПРОФІЛЮ ➔"
             sub_col = (255, 245, 180, 255)
@@ -317,7 +330,7 @@ class VideoEngine:
         sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME}"
         c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(sub_t, font=self.font_badge))//2, 88), sub_t, font=self.font_badge, fill=sub_col)
 
-        sub_cache = {e["text"]: self._render_sub(e["text"]) for e in sub_events}
+        sub_cache = {e["text"]: self._render_sub(e["text"], is_bait=is_bait) for e in sub_events}
 
         def make_frame(t):
             if user_video_clip:
@@ -327,18 +340,20 @@ class VideoEngine:
                 
                 small = v_img.resize((270, 480))
                 bg_v = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR)
-                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 120))
+                dim_a = 145 if is_bait else 120
+                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, dim_a))
                 bg_v.paste(dim, (0, 0), dim)
                 frame = bg_v.convert("RGBA")
 
                 vw, vh = v_img.size
-                target_w = 1000
+                target_w = 1020 if is_bait else 1000
                 target_h = int(vh * (target_w / vw))
                 sharp_v = v_img.resize((target_w, target_h))
                 center_y = (Config.VIDEO_HEIGHT - target_h) // 2 - 20
                 frame.paste(sharp_v, ((Config.VIDEO_WIDTH - target_w)//2, center_y))
             else:
-                zoom = 1.0 + 0.03 * (t / max(1.0, duration))
+                zoom_rate = 0.05 if is_bait else 0.03
+                zoom = 1.0 + zoom_rate * (t / max(1.0, duration))
                 zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
                 z_img = prepared_img.resize((zw, zh))
                 frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
@@ -363,7 +378,7 @@ class VideoEngine:
             user_video_clip.close()
         return out_file
 
-app = FastAPI(title="News Studio Pro")
+app = FastAPI(title="News Studio Dual-Account Pro")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
@@ -372,13 +387,13 @@ async def home():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News Studio Pro</title>
+    <title>News Studio Dual Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root { --bg: #070A11; --card: #131A26; --accent: #2AABEE; --gold: #FFD233; --green: #2ED573; --red: #FF3B30; }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
         body { background: var(--bg); color: #fff; min-height: 100vh; padding: 25px 15px; }
-        .wrap { max-width: 850px; margin: 0 auto; }
+        .wrap { max-width: 1100px; margin: 0 auto; }
         header { text-align: center; margin-bottom: 20px; }
         h1 { font-size: 26px; font-weight: 800; }
         .box { background: var(--card); border: 1px solid #232E42; border-radius: 20px; padding: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
@@ -386,24 +401,31 @@ async def home():
         .select-row { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 14px; background: #0A0E17; padding: 12px 16px; border-radius: 12px; border: 1px solid #232E42; align-items: center; }
         .select-label { font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 6px; }
         .drop { border: 2px dashed #2AABEE; border-radius: 12px; padding: 16px; text-align: center; cursor: pointer; color: #fff; font-size: 14px; margin-bottom: 14px; background: rgba(42, 171, 238, 0.05); }
-        .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; }
-        #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; }
-        .res { margin-top: 25px; display: none; }
-        video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
+        .btn-go { background: linear-gradient(135deg, #2AABEE, #0077B5); color: #fff; border: none; padding: 16px; border-radius: 12px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%; transition: 0.2s; }
+        .btn-go:hover { filter: brightness(1.1); }
+        .btn-go:disabled { opacity: 0.5; cursor: not-allowed; }
+        #st { display: none; text-align: center; color: var(--gold); margin-top: 14px; font-weight: 700; font-size: 15px; }
+
+        .dual-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 25px; }
+        @media (max-width: 800px) { .dual-grid { grid-template-columns: 1fr; } }
+
+        .res-card { background: #0D121D; border: 1px solid #232E42; border-radius: 18px; padding: 18px; display: none; }
+        .res-card.bait { border-color: rgba(255, 59, 48, 0.5); }
+        .res-badge { display: inline-block; padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 800; margin-bottom: 12px; }
+        .badge-full { background: rgba(42, 171, 238, 0.2); color: #2AABEE; }
+        .badge-bait { background: rgba(255, 59, 48, 0.2); color: #FF6B6B; }
+
+        video { width: 100%; max-height: 460px; border-radius: 12px; background: #000; border: 1px solid #232E42; }
         
-        .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
-        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
-        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
+        .seo-box { background: #070A11; border: 1px solid #232E42; border-radius: 12px; padding: 14px; margin-top: 12px; }
+        .seo-title { font-size: 13px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 5px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
         .copy-btn:hover { background: rgba(255,255,255,0.18); }
-        .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
+        .seo-text { font-size: 12px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.45; }
 
-        .reply-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: rgba(255,255,255,0.04); padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.06); }
-        .reply-text { font-size: 13px; color: #D5E0F0; line-height: 1.4; }
-
-        .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
-        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
-        .soc-link { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 14px; display: flex; align-items: center; justify-content: center; }
-        .btn-dl { background: var(--green); color: #000; }
+        .btn-dl { display: block; text-align: center; background: var(--green); color: #000; text-decoration: none; padding: 12px; border-radius: 10px; font-weight: 800; font-size: 14px; margin-top: 12px; }
+        .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-top: 16px; }
+        .soc-link { padding: 11px; border-radius: 10px; text-align: center; text-decoration: none; font-weight: 800; font-size: 13px; }
         .btn-tt { background: #000; color: #fff; border: 1px solid #333; }
         .btn-yt { background: #FF0000; color: #fff; }
         .btn-ig { background: linear-gradient(45deg, #F58529, #DD2A7B, #8134AF); color: #fff; }
@@ -414,19 +436,13 @@ async def home():
 <body>
     <div class="wrap">
         <header>
-            <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Адаптивний перелив, правильний титр NEWS та вікно коментаря</p>
+            <h1>🎬 Студія новин NEWS УКРАЇНА 365 (2 Акаунти)</h1>
+            <p style="color:#8E9BAE; font-size:14px;">Один клік — 2 унікальних відео: повна новина (Акаунт 1) + перелив у ТГ (Акаунт 2)</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
-            <div class="select-row" style="border-color: rgba(255, 59, 48, 0.4);">
-                <span style="color:#FFD233; font-size:14px;">Формат ролика:</span>
-                <label class="select-label"><input type="radio" name="mode" value="full" checked> 📰 Повна новина</label>
-                <label class="select-label" style="color:#FF6B6B;"><input type="radio" name="mode" value="bait"> 🔥 100% Перелив у ТГ</label>
-            </div>
-
             <div class="select-row">
                 <span style="color:#8E9BAE; font-size:14px;">Голос диктора:</span>
                 <label class="select-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural" checked> Жіночий (Поліна)</label>
@@ -434,47 +450,63 @@ async def home():
             </div>
 
             <div class="drop" onclick="document.getElementById('mFile').click()">
-                📹 <b>Додайте ВІДЕО або фото з новини</b> (живе відео програватиметься в динаміці)
+                📹 <b>Додайте ВІДЕО або фото з новини</b> (піде на обидва ролики)
                 <input type="file" id="mFile" accept="video/*,image/*" style="display:none;" onchange="showF(this)">
                 <div id="mTxt" style="color:var(--accent); font-weight:bold; margin-top:5px;"></div>
             </div>
 
-            <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
-            <div id="st">⏳ Адаптація сценарію, монтаж відео та генерація коментаря... (20-30 сек)</div>
+            <button class="btn-go" id="btn" onclick="genBoth()">🚀 Змонтувати ОДРАЗУ 2 ВІДЕО</button>
+            <div id="st"></div>
 
-            <div class="res" id="resBox">
-                <video id="vPlay" controls></video>
+            <div class="dual-grid">
+                <div class="res-card" id="cardFull">
+                    <span class="res-badge badge-full">📰 Акаунт 1: Повна новина</span>
+                    <video id="vidFull" controls></video>
+                    <a id="dlFull" class="btn-dl" download>⬇ Скачати MP4 (Акаунт 1)</a>
 
-                <!-- Блок 1: Опис і хештеги -->
-                <div class="seo-box">
-                    <div class="seo-title">
-                        <span>🔥 Опис та хештеги під рекомендації:</span>
-                        <button class="copy-btn" onclick="copyText('seoContent')">📋 Копіювати</button>
+                    <div class="seo-box">
+                        <div class="seo-title">
+                            <span>🔥 Опис та хештеги:</span>
+                            <button class="copy-btn" onclick="copyText('seoFull')">📋 Копіювати</button>
+                        </div>
+                        <div class="seo-text" id="seoFull"></div>
                     </div>
-                    <div class="seo-text" id="seoContent"></div>
+
+                    <div class="seo-box" style="border-color: rgba(42, 171, 238, 0.4);">
+                        <div class="seo-title" style="color:#2AABEE;">
+                            <span>💬 Коментар під відео:</span>
+                            <button class="copy-btn" onclick="copyText('comFull')">📋 Копіювати</button>
+                        </div>
+                        <div class="seo-text" id="comFull" style="color:#fff;"></div>
+                    </div>
                 </div>
 
-                <!-- Блок 2: Адаптивний коментар під це відео -->
-                <div class="seo-box" style="border-color: rgba(42, 171, 238, 0.5);">
-                    <div class="seo-title" style="color:#2AABEE;">
-                        <span>💬 Готовий коментар під ЦЕ відео (закріпи під постом):</span>
-                        <button class="copy-btn" onclick="copyText('readyComment')">📋 Копіювати коментар</button>
-                    </div>
-                    <div class="seo-text" id="readyComment" style="color:#fff; font-weight:bold;"></div>
-                </div>
+                <div class="res-card bait" id="cardBait">
+                    <span class="res-badge badge-bait">🔥 Акаунт 2: Перелив у ТГ</span>
+                    <video id="vidBait" controls></video>
+                    <a id="dlBait" class="btn-dl" download>⬇ Скачати MP4 (Акаунт 2)</a>
 
-                <!-- Блок 3: Шаблон для ЛС -->
-                <div class="seo-box">
-                    <div class="seo-title">
-                        <span>📩 Шаблон для автовідповіді в ЛС (TikTok Business):</span>
-                        <button class="copy-btn" onclick="copyText('dmTemplate')">📋 Копіювати для ЛС</button>
+                    <div class="seo-box">
+                        <div class="seo-title">
+                            <span>🔥 Опис та хештеги:</span>
+                            <button class="copy-btn" onclick="copyText('seoBait')">📋 Копіювати</button>
+                        </div>
+                        <div class="seo-text" id="seoBait"></div>
                     </div>
-                    <div class="seo-text" id="dmTemplate">Вітаємо! Дякуємо за підписку 🙏 Всі головні новини без цензури та оперативно публікуємо тут: https://t.me/kropivnit</div>
-                </div>
 
-                <div class="social-title">🚀 Завантажити та опублікувати:</div>
+                    <div class="seo-box" style="border-color: rgba(255, 59, 48, 0.4);">
+                        <div class="seo-title" style="color:#FF6B6B;">
+                            <span>💬 Коментар під відео:</span>
+                            <button class="copy-btn" onclick="copyText('comBait')">📋 Копіювати</button>
+                        </div>
+                        <div class="seo-text" id="comBait" style="color:#fff;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="socPanel" style="display:none; margin-top:20px; border-top:1px solid #232E42; padding-top:15px;">
+                <div style="font-size:14px; font-weight:800; margin-bottom:10px;">🚀 Швидке вивантаження в соцмережі:</div>
                 <div class="social-grid">
-                    <a id="dlBtn" class="soc-link btn-dl" download>⬇ Скачати MP4</a>
                     <a href="https://www.tiktok.com/upload" target="_blank" class="soc-link btn-tt">🎵 TikTok</a>
                     <a href="https://www.youtube.com/upload" target="_blank" class="soc-link btn-yt">▶ Shorts</a>
                     <a href="https://www.instagram.com/" target="_blank" class="soc-link btn-ig">📸 Reels</a>
@@ -494,46 +526,65 @@ async def home():
                 document.getElementById('mTxt').innerText = '✓ Обрано файл: ' + selectedFile.name;
             }
         }
-        async function gen() {
+
+        async function requestVideo(txt, voice, mode) {
+            const fd = new FormData();
+            fd.append('text', txt);
+            fd.append('voice', voice);
+            fd.append('mode', mode);
+            if(selectedFile) {
+                fd.append('media_file', selectedFile);
+            }
+            const res = await fetch('/api/generate', { method: 'POST', body: fd });
+            if (!res.ok) {
+                throw new Error("Помилка сервера (код " + res.status + ")");
+            }
+            return await res.json();
+        }
+
+        async function genBoth() {
             const btn = document.getElementById('btn');
             const st = document.getElementById('st');
-            const box = document.getElementById('resBox');
-            const vid = document.getElementById('vPlay');
             const txt = document.getElementById('pTxt').value;
             const voice = document.querySelector('input[name="voice"]:checked').value;
-            const mode = document.querySelector('input[name="mode"]:checked').value;
 
             btn.disabled = true;
-            st.style.display = 'block';
+            document.getElementById('cardFull').style.display = 'none';
+            document.getElementById('cardBait').style.display = 'none';
+            document.getElementById('socPanel').style.display = 'none';
 
             try {
-                const fd = new FormData();
-                fd.append('text', txt);
-                fd.append('voice', voice);
-                fd.append('mode', mode);
-                if(selectedFile) {
-                    fd.append('media_file', selectedFile);
+                st.style.display = 'block';
+                st.innerText = '⏳ [1/2] Монтую відео для Акаунту 1 (Повна новина)...';
+                const d1 = await requestVideo(txt, voice, 'full');
+                if(d1.video_url) {
+                    document.getElementById('vidFull').src = d1.video_url;
+                    document.getElementById('dlFull').href = d1.video_url;
+                    document.getElementById('seoFull').innerText = d1.seo_desc;
+                    document.getElementById('comFull').innerText = d1.ready_comment;
+                    document.getElementById('cardFull').style.display = 'block';
                 }
-                const res = await fetch('/api/generate', { method: 'POST', body: fd });
-                if (!res.ok) {
-                    throw new Error("Сервер не зміг обробити файл (код " + res.status + ")");
+
+                st.innerText = '⏳ [2/2] Монтую відео для Акаунту 2 (100% Перелив у ТГ)...';
+                const d2 = await requestVideo(txt, voice, 'bait');
+                if(d2.video_url) {
+                    document.getElementById('vidBait').src = d2.video_url;
+                    document.getElementById('dlBait').href = d2.video_url;
+                    document.getElementById('seoBait').innerText = d2.seo_desc;
+                    document.getElementById('comBait').innerText = d2.ready_comment;
+                    document.getElementById('cardBait').style.display = 'block';
                 }
-                const d = await res.json();
-                if(d.video_url) {
-                    vid.src = d.video_url;
-                    document.getElementById('dlBtn').href = d.video_url;
-                    document.getElementById('seoContent').innerText = d.seo_desc;
-                    document.getElementById('readyComment').innerText = d.ready_comment;
-                    box.style.display = 'block';
-                    vid.play();
-                }
+
+                document.getElementById('socPanel').style.display = 'block';
+                st.innerText = '✅ Обидва відео готові!';
             } catch(e) {
                 alert('Помилка: ' + e.message);
+                st.style.display = 'none';
             } finally {
                 btn.disabled = false;
-                st.style.display = 'none';
             }
         }
+
         function copyText(elementId) {
             const txt = document.getElementById(elementId).innerText;
             navigator.clipboard.writeText(txt);
@@ -560,16 +611,16 @@ async def api_generate(
         ext = Path(media_file.filename).suffix.lower()
         if not ext:
             ext = ".mp4"
-        saved_media = Config.TEMP_DIR / f"upload_{int(time.time())}{ext}"
+        saved_media = Config.TEMP_DIR / f"upload_{mode}_{int(time.time())}{ext}"
         with open(saved_media, "wb") as buffer:
             shutil.copyfileobj(media_file.file, buffer)
 
-    temp_audio = Config.TEMP_DIR / f"v_{int(time.time())}.mp3"
+    temp_audio = Config.TEMP_DIR / f"v_{mode}_{int(time.time())}.mp3"
     audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
     sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
 
     engine = VideoEngine()
-    out_file = Config.OUTPUT_DIR / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    out_file = Config.OUTPUT_DIR / f"news_{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
     engine.render(parsed, audio_path, sub_events, out_file, saved_media)
 
     for p in [temp_audio, saved_media]:
