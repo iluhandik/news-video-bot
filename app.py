@@ -15,7 +15,7 @@ from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
-    CHANNEL_USERNAME = "@news_ukraine365"
+    CHANNEL_USERNAME = "@kropivnit"
     VOICE_NAME = "uk-UA-PolinaNeural"
     VOICE_RATE = "+8%"
     VIDEO_WIDTH = 1080
@@ -57,23 +57,66 @@ def has_word(text: str, words: List[str]) -> bool:
             return True
     return False
 
+def get_adaptive_cta(combined_text: str, mode: str) -> Dict[str, str]:
+    """Підбирає логічний заклик та готовий коментар під КОНКРЕТНУ тему новини"""
+    t = combined_text.lower()
+
+    if has_word(t, ["світл", "електр", "блекаут", "дтек", "графік"]):
+        if mode == "bait":
+            voice_cta = "Але точний графік відключень для вашої області та коли повернуть світло, дивіться у нашому Телеграм каналі Ньюз Україна 365 у шапці профілю!"
+            comment = "⚡ Повний графік відключень по кожній області вже опублікували в нашому Telegram 👉 NEWS УКРАЇНА 365 (посилання в шапці профілю)"
+        else:
+            voice_cta = "Оперативні графіки та новини енергетики дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю!"
+            comment = "💡 Слідкувати за оновленнями графіків по вашому місту можна в нашому Telegram: NEWS УКРАЇНА 365 (в шапці профілю)"
+
+    elif has_word(t, ["путін", "анекдот", "переговор", "трамп", "зеленськ", "янукович"]):
+        if mode == "bait":
+            voice_cta = "А що саме сталося далі та повне відео без цензури і вирізок ми вже виклали в нашому Телеграм каналі Ньюз Україна 365 у шапці профілю!"
+            comment = "🔥 Повне відео без вирізок та реакцію вже закинули в Telegram 👉 NEWS УКРАЇНА 365 (посилання закріплено в шапці)"
+        else:
+            voice_cta = "Повне відео виступу та головні заяви дивіться в нашому Телеграм каналі Ньюз Україна 365 в шапці профілю!"
+            comment = "👇 Усі подробиці та повний розбір заяви вже в нашому Telegram: NEWS УКРАЇНА 365 (посилання в шапці)"
+
+    elif has_word(t, ["обстріл", "удар", "ракета", "шахед", "приліт", "ринок", "вибух"]):
+        if mode == "bait":
+            voice_cta = "Але кадри моменту влучання та перші деталі з місця події, які блокує Тік Ток, вже в нашому Телеграм каналі Ньюз Україна 365 в шапці профілю!"
+            comment = "🚨 Кадри без цензури та оперативні деталі з місця подій вже в Telegram 👉 NEWS УКРАЇНА 365 (шукайте в шапці профілю)"
+        else:
+            voice_cta = "Оперативну ситуацію та кадри з місця подій дивіться в нашому Телеграм каналі Ньюз Україна 365 у шапці профілю!"
+            comment = "⚠️ Усі оперативні новини та відео без блюру в нашому Telegram: NEWS УКРАЇНА 365 (в шапці профілю)"
+
+    elif has_word(t, ["закон", "штраф", "подат", "пенсі", "виплат", "тариф", "дорог"]):
+        if mode == "bait":
+            voice_cta = "Але точний розрахунок сум та кого саме торкнуться зміни, ми вже виклали в нашому Телеграм каналі Ньюз Україна 365 у шапці профілю!"
+            comment = "📌 Повний перелік змін, сум та кого це торкнеться вже в Telegram 👉 NEWS УКРАЇНА 365 (посилання в шапці)"
+        else:
+            voice_cta = "Усі подробиці нового рішення дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю!"
+            comment = "👇 Повний текст рішення та роз'яснення вже в нашому Telegram: NEWS УКРАЇНА 365 (в шапці профілю)"
+
+    else:
+        if mode == "bait":
+            voice_cta = "Але повне відео та всі деталі, які видаляє Тік Ток, ми вже виклали в нашому Телеграм каналі Ньюз Україна 365 у шапці профілю!"
+            comment = "🔥 Повне відео без цензури та всі деталі вже виклали в Telegram 👉 NEWS УКРАЇНА 365 (посилання в шапці профілю)"
+        else:
+            voice_cta = "Більше ексклюзивних новин дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю!"
+            comment = "👉 Повні новини та відео без затримок у нашому Telegram: NEWS УКРАЇНА 365 (посилання в шапці)"
+
+    return {"voice_cta": voice_cta, "comment": comment}
+
 def generate_seo(headline: str, body: str, mode: str) -> str:
     combined = (headline + " " + body).lower()
-    if has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл"]):
+    if has_word(combined, ["путін", "анекдот", "переговор", "трамп", "зеленськ"]):
+        tags = ["#переговори", "#політика", "#новинисвіту", "#путін", "#україна"]
+        q = "Що думаєте про такі заяви? Пишіть у коментарях 👇"
+    elif has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл"]):
         tags = ["#чорноморськ", "#одеса", "#обстріл", "#новиниукраїни", "#війна"]
-        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇" if mode == "bait" else "Співчуття постраждалим та рідним. Бережіть себе! 👇"
+        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇"
     elif has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік"]):
         tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки"]
-        q = "Повний графік по кожному району вже в нашому ТГ в шапці профілю! 👇" if mode == "bait" else "Як у вас зараз зі світлом? Пишіть у коментарях 👇"
-    elif has_word(combined, ["патрон", "пес", "собак", "цуцен"]):
-        tags = ["#песпатрон", "#патрон", "#собака", "#україна", "#тварини"]
-        q = "Усі фото та відео вже в нашому Телеграм каналі в шапці профілю 👇"
-    elif has_word(combined, ["землетрус", "поштовх", "магнітуд"]):
-        tags = ["#землетрус", "#україна", "#надзвичайніновини", "#резонанс"]
-        q = "Мапа поштовхів та всі деталі вже в нашому ТГ в шапці профілю 👇"
+        q = "Повний графік по кожному району вже в нашому ТГ в шапці профілю! 👇"
     else:
         tags = ["#терміново", "#важливо", "#новиниукраїни", "#резонанс"]
-        q = "Повні кадри та деталі, які видаляє ТікТок, вже у нашому ТГ в шапці профілю 👇" if mode == "bait" else "Яка ваша думка щодо цієї новини? Обговорюємо в коментарях 👇"
+        q = "Повні кадри та деталі, які видаляє ТікТок, вже у нашому ТГ в шапці профілю 👇"
 
     rec_tags = ["#новини", "#україна", "#рек", "#рекомендації", "#хочуврек", "#тренди"]
     unique_tags = list(dict.fromkeys(tags + rec_tags))
@@ -107,23 +150,18 @@ def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
         headline = clean
         full_body = ""
 
-    # РЕЖИМ 1: Жорсткий перелив у ТГ (тільки інтрига, без розкриття суті)
+    combined_for_cta = f"{headline} {full_body}"
+    adaptive = get_adaptive_cta(combined_for_cta, mode)
+    cta = adaptive["voice_cta"]
+
     if mode == "bait":
         teaser = other_lines[0] if (len(lines) > 1 and other_lines) else ""
-        cta = (
-            "Але повне відео без цензури, точний список та всі подробиці, "
-            "які блокує Тік Ток, ми вже виклали в нашому Телеграм каналі Ньюз Україна 365. "
-            "Шукайте посилання в шапці профілю!"
-        )
         if teaser and teaser.lower() != headline.lower():
             voice = f"{headline}. {teaser}. {cta}"
         else:
             voice = f"{headline}. {cta}"
         display_body = teaser
-
-    # РЕЖИМ 2: Повна інформація (як раніше)
     else:
-        cta = "Більше деталей дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю."
         if full_body and full_body.lower() != headline.lower():
             voice = f"{headline}. {full_body}. {cta}"
         else:
@@ -135,6 +173,7 @@ def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
         "body": sanitize_text(display_body)[:220],
         "voiceover": sanitize_text(voice),
         "seo_desc": generate_seo(headline, display_body if display_body else headline, mode),
+        "ready_comment": adaptive["comment"],
         "mode": mode
     }
 
@@ -165,8 +204,11 @@ class TTSEngine:
 
     @classmethod
     def chunks(cls, text: str, dur: float):
+        # Автоматично замінюємо транскрипцію 'ньюз' назад на 'NEWS' у субтитрах!
         clean_words = sanitize_text(text).split()
-        chunks = [" ".join(clean_words[i:i+2]) for i in range(0, len(clean_words), 2)]
+        display_words = ["NEWS" if w.lower() == "ньюз" else w for w in clean_words]
+
+        chunks = [" ".join(display_words[i:i+2]) for i in range(0, len(display_words), 2)]
         t_chunk = dur / max(1, len(chunks))
         return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
 
@@ -238,7 +280,6 @@ class VideoEngine:
             bg_default = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (16, 22, 34))
             prepared_img = bg_default
 
-        # 1. Верхня плашка
         top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 540), (0, 0, 0, 0))
         t_draw = ImageDraw.Draw(top_bar)
         t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 180))
@@ -259,7 +300,6 @@ class VideoEngine:
             cur_hy += 48
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # 2. Нижня плашка CTA (залежить від обраного режиму!)
         cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
         c_draw = ImageDraw.Draw(cta_bar)
 
@@ -352,9 +392,13 @@ async def home():
         video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; border: 1px solid #232E42; }
         
         .seo-box { background: #0A0E17; border: 1px solid #232E42; border-radius: 14px; padding: 16px; margin-top: 15px; }
-        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .seo-title { font-size: 14px; font-weight: 800; color: var(--gold); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
         .copy-btn { background: rgba(255,255,255,0.08); border: 1px solid #232E42; color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; cursor: pointer; font-weight: 700; }
+        .copy-btn:hover { background: rgba(255,255,255,0.18); }
         .seo-text { font-size: 13px; color: #C5D1E0; white-space: pre-wrap; line-height: 1.5; }
+
+        .reply-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: rgba(255,255,255,0.04); padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.06); }
+        .reply-text { font-size: 13px; color: #D5E0F0; line-height: 1.4; }
 
         .social-title { font-size: 14px; font-weight: 800; color: #fff; margin: 20px 0 10px; }
         .social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
@@ -371,20 +415,18 @@ async def home():
     <div class="wrap">
         <header>
             <h1>🎬 Студія новин NEWS УКРАЇНА 365</h1>
-            <p style="color:#8E9BAE; font-size:14px;">Два режими: Повна новина або Жорсткий перелив у ТГ</p>
+            <p style="color:#8E9BAE; font-size:14px;">Адаптивний перелив, правильний титр NEWS та вікно коментаря</p>
         </header>
 
         <div class="box">
             <textarea id="pTxt" placeholder="Вставте сюди пост новини..."></textarea>
             
-            <!-- Перемикач режиму: Повний або Перелив -->
             <div class="select-row" style="border-color: rgba(255, 59, 48, 0.4);">
                 <span style="color:#FFD233; font-size:14px;">Формат ролика:</span>
-                <label class="select-label"><input type="radio" name="mode" value="full" checked> 📰 Повна новина (вся інфа в ролику)</label>
-                <label class="select-label" style="color:#FF6B6B;"><input type="radio" name="mode" value="bait"> 🔥 100% Перелив у ТГ (інтрига + заклик)</label>
+                <label class="select-label"><input type="radio" name="mode" value="full" checked> 📰 Повна новина</label>
+                <label class="select-label" style="color:#FF6B6B;"><input type="radio" name="mode" value="bait"> 🔥 100% Перелив у ТГ</label>
             </div>
 
-            <!-- Перемикач голосу -->
             <div class="select-row">
                 <span style="color:#8E9BAE; font-size:14px;">Голос диктора:</span>
                 <label class="select-label"><input type="radio" name="voice" value="uk-UA-PolinaNeural" checked> Жіночий (Поліна)</label>
@@ -398,17 +440,36 @@ async def home():
             </div>
 
             <button class="btn-go" id="btn" onclick="gen()">🚀 Змонтувати відео</button>
-            <div id="st">⏳ Монтаж відео та озвучка... (20-30 сек)</div>
+            <div id="st">⏳ Адаптація сценарію, монтаж відео та генерація коментаря... (20-30 сек)</div>
 
             <div class="res" id="resBox">
                 <video id="vPlay" controls></video>
 
+                <!-- Блок 1: Опис і хештеги -->
                 <div class="seo-box">
                     <div class="seo-title">
                         <span>🔥 Опис та хештеги під рекомендації:</span>
-                        <button class="copy-btn" onclick="copySeo()">📋 Скопіювати все</button>
+                        <button class="copy-btn" onclick="copyText('seoContent')">📋 Копіювати</button>
                     </div>
                     <div class="seo-text" id="seoContent"></div>
+                </div>
+
+                <!-- Блок 2: Адаптивний коментар під це відео -->
+                <div class="seo-box" style="border-color: rgba(42, 171, 238, 0.5);">
+                    <div class="seo-title" style="color:#2AABEE;">
+                        <span>💬 Готовий коментар під ЦЕ відео (закріпи під постом):</span>
+                        <button class="copy-btn" onclick="copyText('readyComment')">📋 Копіювати коментар</button>
+                    </div>
+                    <div class="seo-text" id="readyComment" style="color:#fff; font-weight:bold;"></div>
+                </div>
+
+                <!-- Блок 3: Шаблон для ЛС -->
+                <div class="seo-box">
+                    <div class="seo-title">
+                        <span>📩 Шаблон для автовідповіді в ЛС (TikTok Business):</span>
+                        <button class="copy-btn" onclick="copyText('dmTemplate')">📋 Копіювати для ЛС</button>
+                    </div>
+                    <div class="seo-text" id="dmTemplate">Вітаємо! Дякуємо за підписку 🙏 Всі головні новини без цензури та оперативно публікуємо тут: https://t.me/kropivnit</div>
                 </div>
 
                 <div class="social-title">🚀 Завантажити та опублікувати:</div>
@@ -426,7 +487,6 @@ async def home():
 
     <script>
         let selectedFile = null;
-        let currentSeoText = '';
 
         function showF(i) {
             if(i.files && i.files[0]) {
@@ -462,8 +522,8 @@ async def home():
                 if(d.video_url) {
                     vid.src = d.video_url;
                     document.getElementById('dlBtn').href = d.video_url;
-                    currentSeoText = d.seo_desc;
                     document.getElementById('seoContent').innerText = d.seo_desc;
+                    document.getElementById('readyComment').innerText = d.ready_comment;
                     box.style.display = 'block';
                     vid.play();
                 }
@@ -474,9 +534,10 @@ async def home():
                 st.style.display = 'none';
             }
         }
-        function copySeo() {
-            navigator.clipboard.writeText(currentSeoText);
-            alert("✓ Опис і хештеги скопійовано! Вставляйте у підпис до відео.");
+        function copyText(elementId) {
+            const txt = document.getElementById(elementId).innerText;
+            navigator.clipboard.writeText(txt);
+            alert("✓ Скопійовано в буфер обміну!");
         }
     </script>
 </body>
@@ -518,7 +579,8 @@ async def api_generate(
 
     return {
         "video_url": f"/videos/{out_file.name}",
-        "seo_desc": parsed["seo_desc"]
+        "seo_desc": parsed["seo_desc"],
+        "ready_comment": parsed["ready_comment"]
     }
 
 @app.get("/videos/{filename}")
