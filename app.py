@@ -1,24 +1,24 @@
 import os
 import re
+import gc
 import time
-import subprocess
+import uuid
 import shutil
+import threading
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from moviepy import VideoClip, AudioFileClip, VideoFileClip
 
 class Config:
     CHANNEL_DISPLAY_NAME = "NEWS УКРАЇНА 365"
     CHANNEL_BAIT_WATERMARK = "NEWS УКРАЇНА 365 | ЕКСКЛЮЗИВ"
     CHANNEL_USERNAME = "@kropivnit"
     VOICE_NAME = "uk-UA-PolinaNeural"
-    VOICE_RATE = "+8%"
     VIDEO_WIDTH = 1080
     VIDEO_HEIGHT = 1920
     VIDEO_FPS = 25
@@ -28,6 +28,8 @@ class Config:
 
 Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 Config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+JOBS: Dict[str, Dict] = {}
 
 def sanitize_text(text: str) -> str:
     if not text:
@@ -77,7 +79,7 @@ def get_adaptive_cta(combined_text: str, mode: str) -> Dict[str, str]:
             voice_cta = "Повне відео виступу та головні заяви дивіться в нашому Телеграм каналі Ньюз Україна 365 в шапці профілю!"
             comment = "👇 Усі подробиці та повний розбір заяви вже в нашому Telegram: NEWS УКРАЇНА 365 (посилання в шапці)"
 
-    elif has_word(t, ["обстріл", "удар", "ракета", "шахед", "приліт", "ринок", "вибух"]):
+    elif has_word(t, ["обстріл", "удар", "ракета", "шахед", "приліт", "ринок", "вибух", "евакуац", "атакув"]):
         if mode == "bait":
             voice_cta = "Але кадри моменту влучання та перші деталі з місця події, які блокує Тік Ток, вже в нашому Телеграм каналі Ньюз Україна 365 в шапці профілю!"
             comment = "🚨 Кадри без цензури та оперативні деталі з місця подій вже в Telegram 👉 NEWS УКРАЇНА 365 (шукайте в шапці профілю)"
@@ -108,9 +110,9 @@ def generate_seo(headline: str, body: str, mode: str) -> str:
     if has_word(combined, ["путін", "анекдот", "переговор", "трамп", "зеленськ"]):
         tags = ["#переговори", "#політика", "#новинисвіту", "#путін", "#україна"]
         q = "Що думаєте про такі заяви? Пишіть у коментарях 👇"
-    elif has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл"]):
-        tags = ["#чорноморськ", "#одеса", "#обстріл", "#новиниукраїни", "#війна"]
-        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇" if mode == "bait" else "Співчуття постраждалим та рідним. Бережіть себе! 👇"
+    elif has_word(combined, ["чорноморськ", "одес", "удар", "ринок", "загибл", "евакуац", "рятув"]):
+        tags = ["#обстріл", "#новиниукраїни", "#війна", "#герої", "#рятувальники"]
+        q = "Повне відео без блюру та деталі вже в нашому ТГ (посилання в шапці) 👇" if mode == "bait" else "Сили та здоров'я постраждалим! Бережіть себе 👇"
     elif has_word(combined, ["світл", "електр", "блекаут", "дтек", "графік"]):
         tags = ["#відключеннясвітла", "#світло", "#блекаут", "#дтек", "#графіки"]
         q = "Повний графік по кожному району вже в нашому ТГ в шапці профілю! 👇" if mode == "bait" else "Як у вас зараз зі світлом? Пишіть у коментарях 👇"
@@ -135,9 +137,11 @@ def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List
         if d.textlength(test, font=font) <= max_w:
             cur.append(w)
         else:
-            if cur: lines.append(" ".join(cur))
+            if cur:
+                lines.append(" ".join(cur))
             cur = [w]
-    if cur: lines.append(" ".join(cur))
+    if cur:
+        lines.append(" ".join(cur))
     return lines
 
 def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
@@ -186,7 +190,7 @@ class TTSEngine:
         safe = sanitize_text(text)
         try:
             cmd = ["edge-tts", "--voice", voice_name, "--rate", "+6%", "--text", safe, "--write-media", str(out_p)]
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=25)
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
         except Exception:
             pass
 
@@ -214,6 +218,13 @@ class TTSEngine:
         t_chunk = dur / max(1, len(chunks))
         return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
 
+def _fmt_ass_time(sec: float) -> str:
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    cs = int((sec - int(sec)) * 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
 class VideoEngine:
     def __init__(self):
         font_p = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
@@ -223,71 +234,10 @@ class VideoEngine:
         self.font_cta = ImageFont.truetype(self.font_path, 28)
         self.font_watermark = ImageFont.truetype(self.font_path, 26)
 
-    def _render_sub(self, text: str, is_bait: bool = False) -> Image.Image:
-        w, h = 1020, 220
-        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        up = sanitize_text(text).upper()
-
-        font_size = 64
-        font = ImageFont.truetype(self.font_path, font_size)
-        while draw.textlength(up, font=font) > (w - 60) and font_size > 34:
-            font_size -= 4
-            font = ImageFont.truetype(self.font_path, font_size)
-
-        tw = draw.textlength(up, font=font)
-        tx = max(20, (w - tw) // 2)
-        ty = (h - font_size) // 2
-
-        for dx in range(-6, 7):
-            for dy in range(-6, 7):
-                if dx*dx + dy*dy <= 36:
-                    draw.text((tx+dx, ty+dy), up, font=font, fill=(0, 0, 0, 255))
-        sub_color = (255, 255, 255, 255) if is_bait else (255, 220, 10, 255)
-        draw.text((tx, ty), up, font=font, fill=sub_color)
-        return img
-
-    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, media_path: Optional[Path] = None):
-        audio_clip = AudioFileClip(str(audio_path))
-        duration = audio_clip.duration
-        is_bait = (parsed["mode"] == "bait")
-
-        user_video_clip = None
-        prepared_img = None
-
-        if media_path and media_path.exists():
-            ext = media_path.suffix.lower()
-            if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"]:
-                try:
-                    user_video_clip = VideoFileClip(str(media_path))
-                except Exception:
-                    user_video_clip = None
-            else:
-                try:
-                    im = Image.open(media_path).convert("RGB")
-                    ow, oh = im.size
-                    tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
-                    if ow / oh > tr:
-                        nw = int(oh * tr)
-                        c_box = ((ow - nw)//2, 0, (ow + nw)//2, oh)
-                    else:
-                        nh = int(ow / tr)
-                        c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
-                    im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
-                    dim_alpha = 135 if is_bait else 110
-                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, dim_alpha))
-                    im_crop.paste(dim, (0, 0), dim)
-                    prepared_img = im_crop
-                except Exception:
-                    prepared_img = None
-
-        if not user_video_clip and not prepared_img:
-            bg_color = (22, 14, 24) if is_bait else (16, 22, 34)
-            prepared_img = Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), bg_color)
-
-        top_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 540), (0, 0, 0, 0))
-        t_draw = ImageDraw.Draw(top_bar)
-        t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 185))
+    def _build_overlay(self, parsed: Dict, out_png: Path, is_bait: bool):
+        overlay = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (0, 0, 0, 0))
+        t_draw = ImageDraw.Draw(overlay)
+        t_draw.rectangle([0, 220, Config.VIDEO_WIDTH, 520], fill=(5, 8, 14, 195))
 
         if is_bait:
             t_draw.rounded_rectangle([40, 260, 300, 320], radius=12, fill=(255, 165, 0, 255))
@@ -313,70 +263,185 @@ class VideoEngine:
         line_col = (255, 80, 80, 240) if is_bait else (255, 215, 0, 240)
         t_draw.line([(40, cur_hy + 8), (Config.VIDEO_WIDTH - 40, cur_hy + 8)], fill=line_col, width=3)
 
-        cta_bar = Image.new("RGBA", (Config.VIDEO_WIDTH, 160), (0, 0, 0, 0))
-        c_draw = ImageDraw.Draw(cta_bar)
-
+        y_off = 1360
         if is_bait:
-            c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(200, 25, 35, 245), outline=(255, 215, 0, 255), width=3)
+            t_draw.rounded_rectangle([40, y_off + 20, Config.VIDEO_WIDTH - 40, y_off + 140], radius=20, fill=(200, 25, 35, 245), outline=(255, 215, 0, 255), width=3)
             c_txt = "ПОВНЕ ВІДЕО БЕЗ ЦЕНЗУРИ В ШАПЦІ ПРОФІЛЮ ➔"
             sub_col = (255, 245, 180, 255)
         else:
-            c_draw.rounded_rectangle([40, 20, Config.VIDEO_WIDTH - 40, 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
+            t_draw.rounded_rectangle([40, y_off + 20, Config.VIDEO_WIDTH - 40, y_off + 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
             c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
             sub_col = (42, 171, 238, 255)
 
-        cw = c_draw.textlength(c_txt, font=self.font_cta)
-        c_draw.text(((Config.VIDEO_WIDTH - cw)//2, 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
+        cw = t_draw.textlength(c_txt, font=self.font_cta)
+        t_draw.text(((Config.VIDEO_WIDTH - cw) // 2, y_off + 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
         sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME}"
-        c_draw.text(((Config.VIDEO_WIDTH - c_draw.textlength(sub_t, font=self.font_badge))//2, 88), sub_t, font=self.font_badge, fill=sub_col)
+        t_draw.text(((Config.VIDEO_WIDTH - t_draw.textlength(sub_t, font=self.font_badge)) // 2, y_off + 88), sub_t, font=self.font_badge, fill=sub_col)
 
-        sub_cache = {e["text"]: self._render_sub(e["text"], is_bait=is_bait) for e in sub_events}
+        overlay.save(out_png, "PNG")
 
-        def make_frame(t):
-            if user_video_clip:
-                loop_t = t % user_video_clip.duration
-                raw_frame = user_video_clip.get_frame(loop_t)
-                v_img = Image.fromarray(raw_frame)
-                
-                small = v_img.resize((270, 480))
-                bg_v = small.resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), Image.BILINEAR)
-                dim_a = 145 if is_bait else 120
-                dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, dim_a))
-                bg_v.paste(dim, (0, 0), dim)
-                frame = bg_v.convert("RGBA")
+    def _build_ass(self, sub_events: List[Dict], out_ass: Path, is_bait: bool):
+        primary_col = "&H00FFFFFF" if is_bait else "&H000ADCFF"
+        header = (
+            "[Script Info]\n"
+            "ScriptType: v4.00+\n"
+            f"PlayResX: {Config.VIDEO_WIDTH}\n"
+            f"PlayResY: {Config.VIDEO_HEIGHT}\n"
+            "WrapStyle: 0\n\n"
+            "[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            f"Style: Default,DejaVu Sans,68,{primary_col},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,700,1\n\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        )
+        lines = [header]
+        for e in sub_events:
+            txt = sanitize_text(e["text"]).upper().replace("\n", " ")
+            if not txt:
+                continue
+            lines.append(f"Dialogue: 0,{_fmt_ass_time(e['start'])},{_fmt_ass_time(e['end'])},Default,,0,0,0,,{txt}\n")
+        out_ass.write_text("".join(lines), encoding="utf-8")
 
-                vw, vh = v_img.size
-                target_w = 1020 if is_bait else 1000
-                target_h = int(vh * (target_w / vw))
-                sharp_v = v_img.resize((target_w, target_h))
-                center_y = (Config.VIDEO_HEIGHT - target_h) // 2 - 20
-                frame.paste(sharp_v, ((Config.VIDEO_WIDTH - target_w)//2, center_y))
+    def render(self, parsed: Dict, audio_path: Path, sub_events: List[Dict], out_file: Path, duration: float, media_path: Optional[Path] = None):
+        is_bait = (parsed["mode"] == "bait")
+        uid = uuid.uuid4().hex[:8]
+        overlay_png = Config.TEMP_DIR / f"ov_{uid}.png"
+        ass_file = Config.TEMP_DIR / f"sub_{uid}.ass"
+        bg_img_file = Config.TEMP_DIR / f"bg_{uid}.jpg"
+
+        self._build_overlay(parsed, overlay_png, is_bait)
+        self._build_ass(sub_events, ass_file, is_bait)
+
+        is_video = False
+        if media_path and media_path.exists():
+            ext = media_path.suffix.lower()
+            if ext in [".mp4", ".mov", ".webm", ".avi", ".mkv"]:
+                is_video = True
             else:
-                zoom_rate = 0.05 if is_bait else 0.03
-                zoom = 1.0 + zoom_rate * (t / max(1.0, duration))
-                zw, zh = int(Config.VIDEO_WIDTH * zoom), int(Config.VIDEO_HEIGHT * zoom)
-                z_img = prepared_img.resize((zw, zh))
-                frame = z_img.crop(((zw - Config.VIDEO_WIDTH)//2, (zh - Config.VIDEO_HEIGHT)//2, (zw + Config.VIDEO_WIDTH)//2, (zh + Config.VIDEO_HEIGHT)//2)).convert("RGBA")
+                try:
+                    im = Image.open(media_path).convert("RGB")
+                    ow, oh = im.size
+                    tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
+                    if ow / oh > tr:
+                        nw = int(oh * tr)
+                        c_box = ((ow - nw)//2, 0, (ow + nw)//2, oh)
+                    else:
+                        nh = int(ow / tr)
+                        c_box = (0, (oh - nh)//2, ow, (oh + nh)//2)
+                    im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+                    dim_alpha = 135 if is_bait else 110
+                    dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, dim_alpha))
+                    im_crop.paste(dim, (0, 0), dim)
+                    im_crop.save(bg_img_file, "JPEG", quality=92)
+                except Exception:
+                    bg_img_file = None
 
-            frame.alpha_composite(top_bar, (0, 0))
+        if not is_video and (not bg_img_file or not bg_img_file.exists()):
+            bg_img_file = Config.TEMP_DIR / f"bg_{uid}.jpg"
+            bg_color = (22, 14, 24) if is_bait else (16, 22, 34)
+            Image.new("RGB", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), bg_color).save(bg_img_file, "JPEG", quality=90)
 
-            for e in sub_events:
-                if e["start"] <= t <= e["end"]:
-                    s = sub_cache.get(e["text"])
-                    if s:
-                        frame.alpha_composite(s, ((Config.VIDEO_WIDTH - s.width)//2, 1080))
-                    break
+        try:
+            if is_video:
+                target_w = 1020 if is_bait else 1000
+                dim_val = "0.56" if is_bait else "0.46"
+                fc = (
+                    f"[0:v]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,"
+                    f"boxblur=4:1,scale={Config.VIDEO_WIDTH}:{Config.VIDEO_HEIGHT},setsar=1,"
+                    f"drawbox=x=0:y=0:w={Config.VIDEO_WIDTH}:h={Config.VIDEO_HEIGHT}:color=black@{dim_val}:t=fill[bg];"
+                    f"[0:v]scale={target_w}:1880:force_original_aspect_ratio=decrease,setsar=1[fg];"
+                    f"[bg][fg]overlay=(W-w)/2:(H-h)/2-20[comp];"
+                    f"[comp][2:v]overlay=0:0,ass={ass_file.name}[outv]"
+                )
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-stream_loop", "-1", "-i", str(media_path.resolve()),
+                    "-i", str(audio_path.resolve()),
+                    "-i", str(overlay_png.resolve()),
+                    "-filter_complex", fc,
+                    "-map", "[outv]", "-map", "1:a",
+                    "-t", f"{duration:.2f}",
+                    "-r", str(Config.VIDEO_FPS),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                    "-threads", "2", "-movflags", "+faststart",
+                    str(out_file.resolve())
+                ]
+            else:
+                fc = f"[0:v][2:v]overlay=0:0,ass={ass_file.name}[outv]"
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-loop", "1", "-framerate", str(Config.VIDEO_FPS), "-i", str(bg_img_file.resolve()),
+                    "-i", str(audio_path.resolve()),
+                    "-i", str(overlay_png.resolve()),
+                    "-filter_complex", fc,
+                    "-map", "[outv]", "-map", "1:a",
+                    "-t", f"{duration:.2f}",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "stillimage", "-crf", "26",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                    "-threads", "2", "-movflags", "+faststart",
+                    str(out_file.resolve())
+                ]
 
-            frame.alpha_composite(cta_bar, (0, 1360))
-            return np.array(frame.convert("RGB"))
+            proc = subprocess.run(cmd, cwd=str(Config.TEMP_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr[-500:] if proc.stderr else "ffmpeg error")
+        finally:
+            for tmp in [overlay_png, ass_file, bg_img_file]:
+                if tmp and tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except Exception:
+                        pass
 
-        clip = VideoClip(make_frame, duration=duration).with_audio(audio_clip)
-        clip.write_videofile(str(out_file), fps=Config.VIDEO_FPS, codec="libx264", audio_codec="aac", preset="ultrafast", threads=2, logger=None)
-        audio_clip.close()
-        clip.close()
-        if user_video_clip:
-            user_video_clip.close()
         return out_file
+
+def _generate_single(text: str, voice: str, mode: str, media_path: Optional[Path]) -> Dict:
+    parsed = parse_post(text, mode)
+    temp_audio = Config.TEMP_DIR / f"v_{mode}_{uuid.uuid4().hex[:8]}.mp3"
+    audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
+    sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
+
+    engine = VideoEngine()
+    out_file = Config.OUTPUT_DIR / f"news_{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}.mp4"
+    engine.render(parsed, audio_path, sub_events, out_file, duration, media_path)
+
+    if temp_audio.exists():
+        try:
+            temp_audio.unlink()
+        except Exception:
+            pass
+    gc.collect()
+
+    return {
+        "video_url": f"/videos/{out_file.name}",
+        "seo_desc": parsed["seo_desc"],
+        "ready_comment": parsed["ready_comment"]
+    }
+
+def _worker_both(job_id: str, text: str, voice: str, saved_media: Optional[Path]):
+    try:
+        JOBS[job_id]["step"] = "⏳ [1/2] Монтую відео для Акаунту 1 (Повна новина)..."
+        res_full = _generate_single(text, voice, "full", saved_media)
+        JOBS[job_id]["full"] = res_full
+
+        JOBS[job_id]["step"] = "⏳ [2/2] Монтую відео для Акаунту 2 (100% Перелив у ТГ)..."
+        res_bait = _generate_single(text, voice, "bait", saved_media)
+        JOBS[job_id]["bait"] = res_bait
+
+        JOBS[job_id]["step"] = "✅ Обидва відео готові!"
+        JOBS[job_id]["done"] = True
+    except Exception as e:
+        JOBS[job_id]["error"] = str(e)
+        JOBS[job_id]["done"] = True
+    finally:
+        if saved_media and saved_media.exists():
+            try:
+                saved_media.unlink()
+            except Exception:
+                pass
+        gc.collect()
 
 app = FastAPI(title="News Studio Dual-Account Pro")
 
@@ -527,21 +592,6 @@ async def home():
             }
         }
 
-        async function requestVideo(txt, voice, mode) {
-            const fd = new FormData();
-            fd.append('text', txt);
-            fd.append('voice', voice);
-            fd.append('mode', mode);
-            if(selectedFile) {
-                fd.append('media_file', selectedFile);
-            }
-            const res = await fetch('/api/generate', { method: 'POST', body: fd });
-            if (!res.ok) {
-                throw new Error("Помилка сервера (код " + res.status + ")");
-            }
-            return await res.json();
-        }
-
         async function genBoth() {
             const btn = document.getElementById('btn');
             const st = document.getElementById('st');
@@ -552,31 +602,61 @@ async def home():
             document.getElementById('cardFull').style.display = 'none';
             document.getElementById('cardBait').style.display = 'none';
             document.getElementById('socPanel').style.display = 'none';
+            st.style.display = 'block';
+            st.innerText = '⏳ Завантажую файл і запускаю монтаж...';
 
             try {
-                st.style.display = 'block';
-                st.innerText = '⏳ [1/2] Монтую відео для Акаунту 1 (Повна новина)...';
-                const d1 = await requestVideo(txt, voice, 'full');
-                if(d1.video_url) {
-                    document.getElementById('vidFull').src = d1.video_url;
-                    document.getElementById('dlFull').href = d1.video_url;
-                    document.getElementById('seoFull').innerText = d1.seo_desc;
-                    document.getElementById('comFull').innerText = d1.ready_comment;
-                    document.getElementById('cardFull').style.display = 'block';
+                const fd = new FormData();
+                fd.append('text', txt);
+                fd.append('voice', voice);
+                if(selectedFile) {
+                    fd.append('media_file', selectedFile);
                 }
 
-                st.innerText = '⏳ [2/2] Монтую відео для Акаунту 2 (100% Перелив у ТГ)...';
-                const d2 = await requestVideo(txt, voice, 'bait');
-                if(d2.video_url) {
-                    document.getElementById('vidBait').src = d2.video_url;
-                    document.getElementById('dlBait').href = d2.video_url;
-                    document.getElementById('seoBait').innerText = d2.seo_desc;
-                    document.getElementById('comBait').innerText = d2.ready_comment;
-                    document.getElementById('cardBait').style.display = 'block';
+                const startRes = await fetch('/api/start_both', { method: 'POST', body: fd });
+                if (!startRes.ok) {
+                    throw new Error("Помилка запуску (код " + startRes.status + ")");
                 }
+                const { job_id } = await startRes.json();
 
-                document.getElementById('socPanel').style.display = 'block';
-                st.innerText = '✅ Обидва відео готові!';
+                let shownFull = false;
+                let shownBait = false;
+
+                while (true) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    const pollRes = await fetch('/api/job/' + job_id);
+                    if (!pollRes.ok) {
+                        throw new Error("Помилка перевірки статусу (" + pollRes.status + ")");
+                    }
+                    const job = await pollRes.json();
+                    st.innerText = job.step || '⏳ Монтую...';
+
+                    if (job.full && !shownFull) {
+                        shownFull = true;
+                        document.getElementById('vidFull').src = job.full.video_url;
+                        document.getElementById('dlFull').href = job.full.video_url;
+                        document.getElementById('seoFull').innerText = job.full.seo_desc;
+                        document.getElementById('comFull').innerText = job.full.ready_comment;
+                        document.getElementById('cardFull').style.display = 'block';
+                    }
+
+                    if (job.bait && !shownBait) {
+                        shownBait = true;
+                        document.getElementById('vidBait').src = job.bait.video_url;
+                        document.getElementById('dlBait').href = job.bait.video_url;
+                        document.getElementById('seoBait').innerText = job.bait.seo_desc;
+                        document.getElementById('comBait').innerText = job.bait.ready_comment;
+                        document.getElementById('cardBait').style.display = 'block';
+                    }
+
+                    if (job.error) {
+                        throw new Error(job.error);
+                    }
+                    if (job.done) {
+                        document.getElementById('socPanel').style.display = 'block';
+                        break;
+                    }
+                }
             } catch(e) {
                 alert('Помилка: ' + e.message);
                 st.style.display = 'none';
@@ -594,6 +674,43 @@ async def home():
 </body>
 </html>"""
 
+@app.post("/api/start_both")
+async def api_start_both(
+    text: Optional[str] = Form(None),
+    voice: Optional[str] = Form("uk-UA-PolinaNeural"),
+    media_file: Optional[UploadFile] = File(None)
+):
+    if not text or not text.strip():
+        text = "У Чорноморську троє загиблих через удар по ринку. Повідомили в ОВА."
+
+    saved_media = None
+    if media_file and media_file.filename:
+        ext = Path(media_file.filename).suffix.lower() or ".mp4"
+        saved_media = Config.TEMP_DIR / f"upload_{uuid.uuid4().hex[:8]}{ext}"
+        with open(saved_media, "wb") as buffer:
+            shutil.copyfileobj(media_file.file, buffer)
+
+    job_id = uuid.uuid4().hex[:10]
+    JOBS[job_id] = {
+        "step": "⏳ [1/2] Готую озвучку та монтаж для Акаунту 1...",
+        "full": None,
+        "bait": None,
+        "done": False,
+        "error": None
+    }
+
+    t = threading.Thread(target=_worker_both, args=(job_id, text, voice or "uk-UA-PolinaNeural", saved_media), daemon=True)
+    t.start()
+
+    return {"job_id": job_id}
+
+@app.get("/api/job/{job_id}")
+async def api_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        return JSONResponse(status_code=404, content={"error": "Job not found"})
+    return job
+
 @app.post("/api/generate")
 async def api_generate(
     text: Optional[str] = Form(None),
@@ -604,35 +721,21 @@ async def api_generate(
     if not text or not text.strip():
         text = "У Чорноморську троє загиблих через удар по ринку. Повідомили в ОВА."
 
-    parsed = parse_post(text, mode)
-
     saved_media = None
     if media_file and media_file.filename:
-        ext = Path(media_file.filename).suffix.lower()
-        if not ext:
-            ext = ".mp4"
-        saved_media = Config.TEMP_DIR / f"upload_{mode}_{int(time.time())}{ext}"
+        ext = Path(media_file.filename).suffix.lower() or ".mp4"
+        saved_media = Config.TEMP_DIR / f"upload_{mode}_{uuid.uuid4().hex[:8]}{ext}"
         with open(saved_media, "wb") as buffer:
             shutil.copyfileobj(media_file.file, buffer)
 
-    temp_audio = Config.TEMP_DIR / f"v_{mode}_{int(time.time())}.mp3"
-    audio_path, duration = TTSEngine.generate(parsed["voiceover"], temp_audio, voice)
-    sub_events = TTSEngine.chunks(parsed["voiceover"], duration)
-
-    engine = VideoEngine()
-    out_file = Config.OUTPUT_DIR / f"news_{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    engine.render(parsed, audio_path, sub_events, out_file, saved_media)
-
-    for p in [temp_audio, saved_media]:
-        if p and p.exists():
-            try: p.unlink()
-            except Exception: pass
-
-    return {
-        "video_url": f"/videos/{out_file.name}",
-        "seo_desc": parsed["seo_desc"],
-        "ready_comment": parsed["ready_comment"]
-    }
+    try:
+        return _generate_single(text, voice or "uk-UA-PolinaNeural", mode or "full", saved_media)
+    finally:
+        if saved_media and saved_media.exists():
+            try:
+                saved_media.unlink()
+            except Exception:
+                pass
 
 @app.get("/videos/{filename}")
 async def get_vid(filename: str):
