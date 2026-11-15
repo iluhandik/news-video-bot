@@ -249,8 +249,8 @@ class TTSEngine:
     def get_grouped_subtitles(cls, vtt_path: Optional[Path], fallback_text: str, duration: float) -> List[Dict]:
         events = cls.parse_vtt(vtt_path) if vtt_path else []
         if not events:
-            words = sanitize_text(fallback_text).split()
-            chunks = [" ".join(words[i:i+3]) for i in range(0, len(words), 3)]
+            words = ["NEWS" if w.lower() == "ньюз" else w for w in sanitize_text(fallback_text).split()]
+            chunks = [" ".join(words[i:i+2]) for i in range(0, len(words), 2)]
             t_chunk = duration / max(1, len(chunks))
             return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
             
@@ -258,8 +258,9 @@ class TTSEngine:
         current_words, current_start = [], None
         for e in events:
             if current_start is None: current_start = e["start"]
-            current_words.append(e["text"])
-            if len(current_words) >= 3:
+            w_clean = "NEWS" if e["text"].strip().lower() == "ньюз" else e["text"].strip()
+            current_words.append(w_clean)
+            if len(current_words) >= 2:
                 grouped.append({"start": current_start, "end": e["end"], "text": " ".join(current_words)})
                 current_words, current_start = [], None
                 
@@ -275,96 +276,83 @@ def _fmt_ass_time(sec: float) -> str:
 # =============================================================
 class VideoEngine:
     def __init__(self):
-        self.font_badge = _load_font(28)
-        self.font_head = _load_font(44)
-        self.font_cta = _load_font(32)
-        self.font_small = _load_font(32) # Збільшено для фолбеку вотермарки
+        self.font_badge = _load_font(26)
+        self.font_head = _load_font(38)
+        self.font_cta = _load_font(28)
+        self.font_watermark = _load_font(26)
 
     def _build_overlay(self, parsed: Dict, out_png: Path, is_bait: bool):
-        W, H = Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT
-        overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        W = Config.VIDEO_WIDTH
+        overlay = Image.new("RGBA", (W, Config.VIDEO_HEIGHT), (0, 0, 0, 0))
         d = ImageDraw.Draw(overlay)
 
-        accent = (255, 60, 80) if is_bait else (42, 171, 238)
-        accent_soft = (255, 165, 0) if is_bait else (100, 200, 255)
+        # Компактна темна плашка шапки в безпечній зоні TikTok (Y=220..520)
+        d.rectangle([0, 220, W, 520], fill=(5, 8, 14, 195))
 
-        # Верхня акцентна лінія
-        d.rectangle([0, 0, W, 10], fill=accent)
+        # Бейдж зліва на Y=260
+        if is_bait:
+            d.rounded_rectangle([40, 260, 300, 320], radius=12, fill=(255, 165, 0, 255))
+            d.text((55, 272), "ЕКСКЛЮЗИВ", font=self.font_badge, fill=(0, 0, 0, 255))
+            wm = Config.CHANNEL_BAIT_WATERMARK
+            wm_fill = (200, 30, 45, 240)
+        else:
+            d.rounded_rectangle([40, 260, 280, 320], radius=12, fill=(225, 25, 35, 255))
+            d.text((55, 272), "ТЕРМІНОВО", font=self.font_badge, fill=(255, 255, 255, 255))
+            wm = Config.CHANNEL_DISPLAY_NAME
+            wm_fill = (120, 50, 210, 240)
 
-        # Бейдж зліва
-        badge_text = "ЕКСКЛЮЗИВ" if is_bait else "ТЕРМІНОВО"
-        badge_fill = (255, 165, 0) if is_bait else (225, 25, 35)
-        badge_fg = (0, 0, 0) if is_bait else (255, 255, 255)
-        bw = int(d.textlength(badge_text, font=self.font_badge)) + 50
-        d.rounded_rectangle([40, 100, 40+bw, 160], radius=30, fill=badge_fill, outline=(255,255,255,50), width=1)
-        d.text((65, 116), badge_text, font=self.font_badge, fill=badge_fg)
-
-        # Водяний знак (Фотермарка)
+        # Вотермарка справа на Y=260 (logo.png або фірмова кольорова плашка)
         if Config.WATERMARK_PATH.exists():
             try:
-                with Image.open(Config.WATERMARK_PATH) as wm:
-                    wm = wm.convert("RGBA")
-                    ratio = 400 / wm.width # Збільшено до 400px
-                    wm = wm.resize((400, int(wm.height * ratio)), Image.Resampling.LANCZOS)
-                    
-                    shadow = Image.new("RGBA", wm.size, (0,0,0,0))
-                    shadow_d = ImageDraw.Draw(shadow)
-                    shadow_d.rectangle([0,0,wm.width,wm.height], fill=(0,0,0,100))
-                    
-                    wm_x = W - wm.width - 40
-                    wm_y = 80
-                    overlay.paste(shadow, (wm_x+4, wm_y+4), shadow)
-                    overlay.paste(wm, (wm_x, wm_y), wm)
-            except Exception as e:
-                print(f"Watermark error: {e}")
+                with Image.open(Config.WATERMARK_PATH) as wm_img:
+                    wm_img = wm_img.convert("RGBA")
+                    ratio = 320 / wm_img.width
+                    wm_img = wm_img.resize((320, int(wm_img.height * ratio)), Image.Resampling.LANCZOS)
+                    overlay.paste(wm_img, (W - wm_img.width - 40, 250), wm_img)
+            except Exception:
+                wm_w = int(d.textlength(wm, font=self.font_watermark))
+                d.rounded_rectangle([W - wm_w - 70, 260, W - 40, 320], radius=12, fill=wm_fill, outline=(255, 255, 255, 200), width=2)
+                d.text((W - wm_w - 55, 274), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
         else:
-            wm = Config.CHANNEL_BAIT_WATERMARK if is_bait else Config.CHANNEL_DISPLAY_NAME
-            wm_w = int(d.textlength(wm, font=self.font_small))
-            d.rounded_rectangle([W - wm_w - 90, 100, W - 40, 160], radius=14, fill=(15, 22, 35, 230), outline=accent_soft, width=2)
-            d.text((W - wm_w - 65, 116), wm, font=self.font_small, fill=(255, 255, 255))
+            wm_w = int(d.textlength(wm, font=self.font_watermark))
+            d.rounded_rectangle([W - wm_w - 70, 260, W - 40, 320], radius=12, fill=wm_fill, outline=(255, 255, 255, 200), width=2)
+            d.text((W - wm_w - 55, 274), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
-        # Панель із заголовком (з акцентною смужкою)
-        panel_y = 260
-        d.rectangle([0, panel_y, W, panel_y + 380], fill=(5, 8, 14, 225))
-        d.line([(0, panel_y), (W, panel_y)], fill=accent, width=4)
-
+        # Заголовок (2 рядки) + золота/червона лінія
         headline_clean = sanitize_text(parsed["headline"]) or ("ЕКСКЛЮЗИВ" if is_bait else "ТЕРМІНОВА НОВИНА")
         h_lines = wrap_text_lines(headline_clean, self.font_head, W - 80)
-        hy = panel_y + 45
-        for hl in h_lines[:3]:
-            d.text((44, hy+4), hl, font=self.font_head, fill=(0, 0, 0, 180))
-            d.text((40, hy), hl, font=self.font_head, fill=(255, 255, 255))
-            hy += 62
+        cur_hy = 345
+        for hl in h_lines[:2]:
+            d.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
+            cur_hy += 48
+        line_col = (255, 80, 80, 240) if is_bait else (255, 215, 0, 240)
+        d.line([(40, cur_hy + 8), (W - 40, cur_hy + 8)], fill=line_col, width=3)
 
-        d.rectangle([40, hy + 15, 40 + 180, hy + 22], fill=accent)
-
-        # CTA-кнопка
-        cta_y = 1480
+        # Нижній CTA-банер на Y=1360..1480 (над описом TikTok)
+        y_off = 1360
         if is_bait:
-            d.rounded_rectangle([40, cta_y, W-40, cta_y+200], radius=28, fill=(180, 20, 30, 250), outline=(255, 215, 0), width=6)
-            cta_l1, cta_l2, cta_col = "ПОВНЕ ВІДЕО БЕЗ ЦЕНЗУРИ", "В ШАПЦІ ПРОФІЛЮ  ➔", (255, 235, 100)
+            d.rounded_rectangle([40, y_off + 20, W - 40, y_off + 140], radius=20, fill=(200, 25, 35, 245), outline=(255, 215, 0, 255), width=3)
+            c_txt = "ПОВНЕ ВІДЕО БЕЗ ЦЕНЗУРИ В ШАПЦІ ПРОФІЛЮ ➔"
+            sub_col = (255, 245, 180, 255)
         else:
-            d.rounded_rectangle([40, cta_y, W-40, cta_y+200], radius=28, fill=(12, 20, 34, 250), outline=accent, width=4)
-            cta_l1, cta_l2, cta_col = "ПОВНІ ДЕТАЛІ В ТЕЛЕГРАМ", "t.me/kropivnit  ➔", accent
+            d.rounded_rectangle([40, y_off + 20, W - 40, y_off + 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
+            c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
+            sub_col = (42, 171, 238, 255)
 
-        cw = d.textlength(cta_l1, font=self.font_cta)
-        d.text(((W - cw) // 2, cta_y + 40), cta_l1, font=self.font_cta, fill=(255, 255, 255))
-        sw = d.textlength(cta_l2, font=self.font_badge)
-        d.text(((W - sw) // 2, cta_y + 120), cta_l2, font=self.font_badge, fill=cta_col)
-
-        # Брендинг знизу
-        d.rectangle([0, H - 40, W, H - 36], fill=accent)
-        d.text((40, H - 34), f"© {Config.CHANNEL_DISPLAY_NAME}", font=self.font_small, fill=(160, 170, 190))
+        cw = d.textlength(c_txt, font=self.font_cta)
+        d.text(((W - cw) // 2, y_off + 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
+        sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME}"
+        d.text(((W - d.textlength(sub_t, font=self.font_badge)) // 2, y_off + 88), sub_t, font=self.font_badge, fill=sub_col)
 
         overlay.save(out_png, "PNG")
 
     def _build_ass(self, sub_events: List[Dict], out_ass: Path, is_bait: bool):
-        primary = "&H00FFFFFF" # Білий для обох (з чорним контуром читається ідеально)
+        primary = "&H00FFFFFF" if is_bait else "&H000ADCFF"
         header = (
             "[Script Info]\nScriptType: v4.00+\n"
             f"PlayResX: {Config.VIDEO_WIDTH}\nPlayResY: {Config.VIDEO_HEIGHT}\nWrapStyle: 0\n\n"
             "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            f"Style: Default,DejaVu Sans,76,{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,2,40,40,560,1\n\n"
+            f"Style: Default,DejaVu Sans,68,{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,40,40,700,1\n\n"
             "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )
         body = [header]
@@ -770,10 +758,10 @@ async def api_start_both(text: Optional[str] = Form(None), voice: Optional[str] 
     if not text or not text.strip(): text = "У Чорноморську троє загиблих через удар по ринку. Повідомили в ОВА."
     saved_media = None
     if media_file and media_file.filename:
-        contents = await media_file.read()
-        if len(contents) > Config.MAX_UPLOAD_MB * 1024 * 1024: raise HTTPException(413, "Файл завеликий")
-        saved_media = Config.TEMP_DIR / f"upload_{uuid.uuid4().hex[:8]}{Path(media_file.filename).suffix.lower()}"
-        saved_media.write_bytes(contents)
+        ext = Path(media_file.filename).suffix.lower() or ".mp4"
+        saved_media = Config.TEMP_DIR / f"upload_{uuid.uuid4().hex[:8]}{ext}"
+        with open(saved_media, "wb") as buffer:
+            shutil.copyfileobj(media_file.file, buffer)
     
     job_id = uuid.uuid4().hex[:10]
     with JOBS_LOCK:
