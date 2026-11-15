@@ -195,7 +195,7 @@ def parse_post(raw_post: str, mode: str = "full") -> Dict[str, str]:
     }
 
 # =============================================================
-# ОЗВУЧКА (EDGE-TTS)
+# ОЗВУЧКА ТА СУБТИТРИ (EDGE-TTS)
 # =============================================================
 class TTSEngine:
     @classmethod
@@ -223,20 +223,49 @@ class TTSEngine:
     @classmethod
     def parse_vtt(cls, vtt_path: Path) -> List[Dict]:
         events = []
-        try: content = vtt_path.read_text(encoding="utf-8")
+        try: content = vtt_path.read_text(encoding="utf-8").replace("\r\n", "\n")
         except Exception: return events
+        
+        pattern = re.compile(r"(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})")
         for block in content.split("\n\n"):
             lines = [l.strip() for l in block.strip().split("\n") if l.strip() and not l.startswith("WEBVTT")]
             if not lines: continue
-            for i, line in enumerate(lines):
-                m = re.match(r"(\d+):(\d+):(\d+)\.(\d+)\s*-->\s*(\d+):(\d+):(\d+)\.(\d+)", line)
-                if m:
-                    start = int(m[1])*3600 + int(m[2])*60 + int(m[3]) + int(m[4])/1000
-                    end = int(m[5])*3600 + int(m[6])*60 + int(m[7]) + int(m[8])/1000
-                    txt = " ".join(lines[i+1:])
-                    if txt.strip(): events.append({"start": start, "end": end, "text": txt})
-                    break
+            
+            time_match = None
+            text_lines = []
+            for line in lines:
+                m = pattern.search(line)
+                if m: time_match = m
+                elif time_match: text_lines.append(line)
+                    
+            if time_match:
+                start = int(time_match[1])*3600 + int(time_match[2])*60 + int(time_match[3]) + int(time_match[4])/1000
+                end = int(time_match[5])*3600 + int(time_match[6])*60 + int(time_match[7]) + int(time_match[8])/1000
+                txt = " ".join(text_lines).strip()
+                if txt: events.append({"start": start, "end": end, "text": txt})
         return events
+
+    @classmethod
+    def get_grouped_subtitles(cls, vtt_path: Optional[Path], fallback_text: str, duration: float) -> List[Dict]:
+        events = cls.parse_vtt(vtt_path) if vtt_path else []
+        if not events:
+            words = sanitize_text(fallback_text).split()
+            chunks = [" ".join(words[i:i+3]) for i in range(0, len(words), 3)]
+            t_chunk = duration / max(1, len(chunks))
+            return [{"text": c, "start": i*t_chunk, "end": (i+1)*t_chunk} for i, c in enumerate(chunks)]
+            
+        grouped = []
+        current_words, current_start = [], None
+        for e in events:
+            if current_start is None: current_start = e["start"]
+            current_words.append(e["text"])
+            if len(current_words) >= 3:
+                grouped.append({"start": current_start, "end": e["end"], "text": " ".join(current_words)})
+                current_words, current_start = [], None
+                
+        if current_words and events:
+            grouped.append({"start": current_start, "end": events[-1]["end"], "text": " ".join(current_words)})
+        return grouped
 
 def _fmt_ass_time(sec: float) -> str:
     return f"{int(sec // 3600)}:{int((sec % 3600) // 60):02d}:{int(sec % 60):02d}.{int((sec - int(sec)) * 100):02d}"
@@ -249,7 +278,7 @@ class VideoEngine:
         self.font_badge = _load_font(28)
         self.font_head = _load_font(44)
         self.font_cta = _load_font(32)
-        self.font_small = _load_font(24)
+        self.font_small = _load_font(32) # Збільшено для фолбеку вотермарки
 
     def _build_overlay(self, parsed: Dict, out_png: Path, is_bait: bool):
         W, H = Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT
@@ -275,8 +304,8 @@ class VideoEngine:
             try:
                 with Image.open(Config.WATERMARK_PATH) as wm:
                     wm = wm.convert("RGBA")
-                    ratio = 320 / wm.width
-                    wm = wm.resize((320, int(wm.height * ratio)), Image.Resampling.LANCZOS)
+                    ratio = 400 / wm.width # Збільшено до 400px
+                    wm = wm.resize((400, int(wm.height * ratio)), Image.Resampling.LANCZOS)
                     
                     shadow = Image.new("RGBA", wm.size, (0,0,0,0))
                     shadow_d = ImageDraw.Draw(shadow)
@@ -292,11 +321,12 @@ class VideoEngine:
             wm = Config.CHANNEL_BAIT_WATERMARK if is_bait else Config.CHANNEL_DISPLAY_NAME
             wm_w = int(d.textlength(wm, font=self.font_small))
             d.rounded_rectangle([W - wm_w - 90, 100, W - 40, 160], radius=14, fill=(15, 22, 35, 230), outline=accent_soft, width=2)
-            d.text((W - wm_w - 65, 118), wm, font=self.font_small, fill=(255, 255, 255))
+            d.text((W - wm_w - 65, 116), wm, font=self.font_small, fill=(255, 255, 255))
 
-        # Панель із заголовком
+        # Панель із заголовком (з акцентною смужкою)
         panel_y = 260
-        d.rectangle([0, panel_y, W, panel_y + 380], fill=(5, 8, 14, 210))
+        d.rectangle([0, panel_y, W, panel_y + 380], fill=(5, 8, 14, 225))
+        d.line([(0, panel_y), (W, panel_y)], fill=accent, width=4)
 
         headline_clean = sanitize_text(parsed["headline"]) or ("ЕКСКЛЮЗИВ" if is_bait else "ТЕРМІНОВА НОВИНА")
         h_lines = wrap_text_lines(headline_clean, self.font_head, W - 80)
@@ -329,12 +359,12 @@ class VideoEngine:
         overlay.save(out_png, "PNG")
 
     def _build_ass(self, sub_events: List[Dict], out_ass: Path, is_bait: bool):
-        primary = "&H00FFFFFF" if is_bait else "&H00FFDC2A"
+        primary = "&H00FFFFFF" # Білий для обох (з чорним контуром читається ідеально)
         header = (
             "[Script Info]\nScriptType: v4.00+\n"
             f"PlayResX: {Config.VIDEO_WIDTH}\nPlayResY: {Config.VIDEO_HEIGHT}\nWrapStyle: 0\n\n"
             "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-            f"Style: Default,DejaVu Sans,72,{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,2,40,40,560,1\n\n"
+            f"Style: Default,DejaVu Sans,76,{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,3,2,40,40,560,1\n\n"
             "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         )
         body = [header]
@@ -373,9 +403,10 @@ class VideoEngine:
                         dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, dim_alpha))
                         im_crop.paste(dim, (0, 0), dim)
                         im_crop.save(bg_img_file, "JPEG", quality=92)
-                except Exception as e:
+                except Exception:
                     bg_img_file = None
 
+        # Якщо медіа немає — генеруємо крутий фон
         if not is_video_media and (not bg_img_file or not bg_img_file.exists()):
             self._create_branded_bg(is_bait, bg_img_file)
 
@@ -403,7 +434,8 @@ class VideoEngine:
 
     def _create_branded_bg(self, is_bait: bool, out_path: Path):
         w, h = Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT
-        top, bot = ((48, 10, 20), (4, 2, 8)) if is_bait else ((10, 18, 42), (2, 4, 10))
+        top = (35, 10, 25) if is_bait else (10, 20, 50)
+        bot = (5, 2, 8) if is_bait else (2, 5, 15)
         
         base = Image.new("RGB", (w, h))
         px = base.load()
@@ -412,20 +444,36 @@ class VideoEngine:
             px_row = (int(top[0]*(1-t) + bot[0]*t), int(top[1]*(1-t) + bot[1]*t), int(top[2]*(1-t) + bot[2]*t))
             for x in range(w): px[x, y] = px_row
 
-        orbs = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        od = ImageDraw.Draw(orbs)
-        colors = [(220, 40, 60), (140, 20, 40), (255, 90, 60)] if is_bait else [(40, 100, 220), (70, 60, 200), (30, 160, 220)]
+        overlay = Image.new("RGBA", (w, h), (0,0,0,0))
+        od = ImageDraw.Draw(overlay)
+        
+        colors = [(255, 50, 80), (255, 100, 50)] if is_bait else [(40, 150, 255), (100, 80, 255)]
+        # Неонові дуги
+        for i in range(4):
+            cx, cy = w // 2, h // 2
+            r = 300 + i * 150
+            od.arc([cx-r, cy-r, cx+r, cy+r], start=random.randint(0, 180), end=random.randint(180, 360), fill=random.choice(colors) + (random.randint(40, 80),), width=random.randint(15, 40))
+            
+        # Світлові кулі
         for _ in range(6):
-            cx, cy, rr = random.randint(-200, w+200), random.randint(-300, h+300), random.randint(300, 700)
+            cx, cy = random.randint(-200, w+200), random.randint(-300, h+300)
+            r = random.randint(200, 500)
             c = random.choice(colors)
-            od.ellipse([cx-rr, cy-rr, cx+rr, cy+rr], fill=(*c, random.randint(25, 60)))
+            od.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(*c, random.randint(20, 60)))
+            
+        overlay = overlay.filter(ImageFilter.GaussianBlur(radius=80))
+        base = Image.alpha_composite(base.convert("RGBA"), overlay)
         
-        orbs = orbs.filter(ImageFilter.GaussianBlur(radius=100))
-        combined = Image.alpha_composite(base.convert("RGBA"), orbs)
-        
-        noise = Image.effect_noise((w, h), 15).convert("L")
-        combined = Image.alpha_composite(combined, Image.merge("RGBA", (noise, noise, noise, Image.new("L", (w, h), 15))))
-        combined.convert("RGB").save(out_path, "JPEG", quality=90)
+        # Технологічна сітка
+        grid = Image.new("RGBA", (w, h), (0,0,0,0))
+        gd = ImageDraw.Draw(grid)
+        for x in range(0, w, 80):
+            gd.line([(x, 0), (x, h)], fill=(255, 255, 255, 10), width=1)
+        for y in range(0, h, 80):
+            gd.line([(0, y), (w, y)], fill=(255, 255, 255, 10), width=1)
+            
+        base = Image.alpha_composite(base, grid)
+        base.convert("RGB").save(out_path, "JPEG", quality=92)
 
 # =============================================================
 # ГЕНЕРАЦІЯ ТА ЧЕРГА
@@ -436,9 +484,7 @@ def _generate_single(text: str, voice: str, mode: str, media_path: Optional[Path
     temp_audio, temp_vtt = Config.TEMP_DIR / f"a_{uid}.mp3", Config.TEMP_DIR / f"a_{uid}.vtt"
 
     audio_path, duration, vtt_path = TTSEngine.generate(parsed["voiceover"], temp_audio, voice, temp_vtt)
-    sub_events = TTSEngine.parse_vtt(vtt_path) if vtt_path else []
-    if not sub_events:
-        sub_events = [{"text": w, "start": i*1.5, "end": (i+1)*1.5} for i, w in enumerate(parsed["voiceover"].split())]
+    sub_events = TTSEngine.get_grouped_subtitles(vtt_path, parsed["voiceover"], duration)
 
     out_file = Config.OUTPUT_DIR / f"news_{mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uid}.mp4"
     VideoEngine().render(parsed, audio_path, sub_events, out_file, duration, media_path)
@@ -542,6 +588,17 @@ video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; b
 .seo-text { font-size: 13px; color: #C8D2E2; white-space: pre-wrap; line-height: 1.6; }
 .btn-dl { display: flex; align-items: center; justify-content: center; text-decoration: none; background: linear-gradient(135deg, var(--green), #1FB863); color: #051A0C; padding: 14px; border-radius: 12px; font-weight: 800; font-size: 14px; margin-top: 14px; box-shadow: 0 8px 24px rgba(46, 224, 122, 0.25); transition: .2s; }
 .btn-dl:hover { transform: translateY(-1px); filter: brightness(1.1); }
+.social-wrap { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); display: none; }
+.social-wrap.show { display: block; }
+.social-title { font-size: 14px; font-weight: 800; margin-bottom: 14px; color: var(--txt); }
+.social-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.soc { padding: 14px; border-radius: 12px; text-align: center; text-decoration: none; font-weight: 800; font-size: 13px; transition: all .2s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.soc:hover { transform: translateY(-2px); filter: brightness(1.1); }
+.soc-tt { background: #000; color: #fff; border: 1px solid #333; }
+.soc-yt { background: #FF0033; color: #fff; }
+.soc-ig { background: linear-gradient(45deg, #F58529, #DD2A7B, #8134AF); color: #fff; }
+.soc-fb { background: #1877F2; color: #fff; }
+.soc-th { background: #101010; color: #fff; border: 1px solid #333; }
 #toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); padding: 14px 24px; border-radius: 12px; font-weight: 800; font-size: 14px; opacity: 0; transition: .3s; z-index: 9999; pointer-events: none; }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.err { background: var(--red); color: #fff; } #toast.ok { background: var(--green); color: #000; }
@@ -564,7 +621,7 @@ video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; b
     <div class="drop" id="dropZone" onclick="document.getElementById('mFile').click()">
       <div class="drop-icon">📹</div>
       <div class="drop-text"><b>Перетягніть відео або фото</b></div>
-      <div class="drop-hint">Не обов'язково. Якщо пусто — буде брендовий фон.</div>
+      <div class="drop-hint">Не обов'язково. Якщо пусто — згенерується неоновий фон.</div>
       <input type="file" id="mFile" accept="video/*,image/*" style="display:none;" onchange="showF(this)">
       <div id="mTxt"></div>
     </div>
@@ -592,6 +649,18 @@ video { width: 100%; max-height: 500px; border-radius: 14px; background: #000; b
         <div class="seo"><div class="seo-head" style="color:#FF8A99;"><span>💬 Коментар</span><button class="copy-btn" onclick="copyText('comBait', this)">📋 Копіювати</button></div><div class="seo-text" id="comBait"></div></div>
       </div>
     </div>
+
+    <div id="socPanel" class="social-wrap">
+      <div class="social-title">🚀 Швидке вивантаження:</div>
+      <div class="social-grid">
+        <a href="https://www.tiktok.com/upload" target="_blank" class="soc soc-tt">🎵 TikTok</a>
+        <a href="https://www.youtube.com/upload" target="_blank" class="soc soc-yt">▶ Shorts</a>
+        <a href="https://www.instagram.com/" target="_blank" class="soc soc-ig">📸 Reels</a>
+        <a href="https://www.facebook.com/reels/create" target="_blank" class="soc soc-fb">📘 Reels FB</a>
+        <a href="https://www.threads.net/" target="_blank" class="soc soc-th">🧵 Threads</a>
+      </div>
+    </div>
+
   </div>
 </div>
 <div id="toast"></div>
@@ -629,6 +698,7 @@ async function genBoth() {
 
   btn.disabled = true;
   document.getElementById('cardFull').classList.remove('show'); document.getElementById('cardBait').classList.remove('show');
+  document.getElementById('socPanel').classList.remove('show');
   pWrap.style.display = 'block';
   document.getElementById('bar-fill').style.width = '5%';
   document.getElementById('st').innerHTML = '⏳ Підготовка... <span id="progTxt">5%</span>';
@@ -668,7 +738,12 @@ async function genBoth() {
         document.getElementById('cardBait').classList.add('show');
       }
       if (job.error) throw new Error(job.error);
-      if (job.done) { toast('✅ Готово!', 'ok'); pWrap.style.display = 'none'; break; }
+      if (job.done) { 
+        toast('✅ Готово!', 'ok'); 
+        pWrap.style.display = 'none'; 
+        document.getElementById('socPanel').classList.add('show');
+        break; 
+      }
     }
   } catch (e) {
     toast('❌ ' + e.message, 'err'); pWrap.style.display = 'none';
