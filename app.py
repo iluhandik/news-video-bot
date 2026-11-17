@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 
 # =============================================================
 # КОНФІГ
@@ -240,7 +240,10 @@ class TTSEngine:
         if out_vtt:
             cmd += ["--write-subtitles", str(out_vtt)]
 
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        if r.returncode != 0 and out_vtt:
+            cmd_fb = ["edge-tts", "--voice", voice, "--rate", "+6%", "--text", safe, "--write-media", str(out_audio)]
+            r = subprocess.run(cmd_fb, capture_output=True, text=True, timeout=45)
         if r.returncode != 0:
             raise RuntimeError(f"TTS помилка: {r.stderr[:200]}")
 
@@ -331,34 +334,28 @@ class VideoEngine:
         overlay = Image.new("RGBA", (W, Config.VIDEO_HEIGHT), (0, 0, 0, 0))
         d = ImageDraw.Draw(overlay)
 
-        # Підготовка заголовка (до 2 рядків, щоб точно знати висоту шапки)
         headline_clean = sanitize_text(parsed["headline"]) or "ТЕРМІНОВА НОВИНА"
         h_lines = wrap_text_lines(headline_clean, self.font_head, W - 80)[:2]
         header_bottom = 345 + len(h_lines) * 48 + 30
 
-        # Темна плашка шапки в безпечній зоні TikTok (Y=220..header_bottom)
         d.rectangle([0, 220, W, header_bottom], fill=(5, 8, 14, 195))
 
-        # Бейдж "ТЕРМІНОВО" зліва на Y=256..316
         badge_txt = "ТЕРМІНОВО"
         bw = int(d.textlength(badge_txt, font=self.font_badge)) + 40
         d.rounded_rectangle([40, 256, 40 + bw, 316], radius=12, fill=(225, 25, 35, 255))
         d.text((60, 270), badge_txt, font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Яскрава фірмова вотермарка справа строго в рядку Y=256..316
         wm = Config.CHANNEL_DISPLAY_NAME
         wm_w = int(d.textlength(wm, font=self.font_watermark))
         d.rounded_rectangle([W - wm_w - 70, 256, W - 40, 316], radius=12, fill=(120, 50, 210, 245), outline=(255, 255, 255, 220), width=2)
         d.text((W - wm_w - 55, 271), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
-        # Заголовок на Y=345 (нижче бейджа й вотермарки)
         cur_hy = 345
         for hl in h_lines:
             d.text((40, cur_hy), hl, font=self.font_head, fill=(255, 255, 255, 255))
             cur_hy += 48
         d.line([(40, cur_hy + 8), (W - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # Нижній CTA-банер на Y=1360..1480 (чистий банер без "+")
         y_off = 1360
         d.rounded_rectangle([40, y_off + 20, W - 40, y_off + 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
         c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
@@ -427,8 +424,8 @@ class VideoEngine:
         try:
             if is_video_media:
                 fc = (
-                    f"[0:v]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=4:1,scale={Config.VIDEO_WIDTH}:{Config.VIDEO_HEIGHT},setsar=1,drawbox=x=0:y=0:w={Config.VIDEO_WIDTH}:h={Config.VIDEO_HEIGHT}:color=black@0.48:t=fill[bg];"
-                    f"[0:v]scale=1000:1880:force_original_aspect_ratio=decrease,setsar=1[fg];"
+                    f"[0:v]scale=135:240:force_original_aspect_ratio=increase,crop=135:240,scale={Config.VIDEO_WIDTH}:{Config.VIDEO_HEIGHT}:flags=bilinear,setsar=1,drawbox=x=0:y=0:w={Config.VIDEO_WIDTH}:h={Config.VIDEO_HEIGHT}:color=black@0.50:t=fill[bg];"
+                    f"[0:v]scale=1000:1880:force_original_aspect_ratio=decrease:flags=fast_bilinear,setsar=1[fg];"
                     f"[bg][fg]overlay=(W-w)/2:(H-h)/2-20[comp];[comp][2:v]overlay=0:0,ass={ass_file.name}[outv]"
                 )
                 cmd = [
@@ -465,49 +462,29 @@ class VideoEngine:
 
     def _create_branded_bg(self, out_path: Path):
         w, h = Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT
-        top, bot = (10, 20, 50), (2, 5, 15)
+        grad = Image.linear_gradient("L").resize((w, h))
+        base = ImageOps.colorize(grad, black=(10, 20, 50), white=(2, 5, 15)).convert("RGBA")
 
-        base = Image.new("RGB", (w, h))
-        px = base.load()
-        for y in range(h):
-            t = y / h
-            px_row = (int(top[0]*(1-t) + bot[0]*t), int(top[1]*(1-t) + bot[1]*t), int(top[2]*(1-t) + bot[2]*t))
-            for x in range(w):
-                px[x, y] = px_row
-
-        overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        od = ImageDraw.Draw(overlay)
+        sw, sh = 270, 480
+        glow = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
         colors = [(40, 150, 255), (100, 80, 255)]
-
-        for i in range(4):
-            cx, cy = w // 2, h // 2
-            r = 300 + i * 150
-            od.arc([cx-r, cy-r, cx+r, cy+r], start=random.randint(0, 180), end=random.randint(180, 360), fill=random.choice(colors) + (random.randint(40, 80),), width=random.randint(15, 40))
-
-        for _ in range(6):
-            cx, cy = random.randint(-200, w+200), random.randint(-300, h+300)
-            r = random.randint(200, 500)
+        for _ in range(5):
+            cx, cy = random.randint(-40, sw + 40), random.randint(-60, sh + 60)
+            r = random.randint(60, 150)
             c = random.choice(colors)
-            od.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(*c, random.randint(20, 60)))
-
-        overlay = overlay.filter(ImageFilter.GaussianBlur(radius=80))
-        base = Image.alpha_composite(base.convert("RGBA"), overlay)
-
-        grid = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        gd = ImageDraw.Draw(grid)
-        for x in range(0, w, 80):
-            gd.line([(x, 0), (x, h)], fill=(255, 255, 255, 10), width=1)
-        for y in range(0, h, 80):
-            gd.line([(0, y), (w, y)], fill=(255, 255, 255, 10), width=1)
-
-        base = Image.alpha_composite(base, grid)
-        base.convert("RGB").save(out_path, "JPEG", quality=92)
+            gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*c, random.randint(35, 75)))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=22)).resize((w, h), Image.Resampling.BILINEAR)
+        base = Image.alpha_composite(base, glow)
+        base.convert("RGB").save(out_path, "JPEG", quality=90)
 
 # =============================================================
 # ГЕНЕРАЦІЯ ТА ЧЕРГА
 # =============================================================
 def _worker_single(job_id: str, text: str, voice: str, saved_media: Optional[Path]):
     def _set(**kw):
+        if "step" in kw:
+            print(f"[JOB {job_id}] {kw['step']}", flush=True)
         with JOBS_LOCK:
             if job_id in JOBS:
                 JOBS[job_id].update(kw)
