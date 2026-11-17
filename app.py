@@ -100,34 +100,34 @@ def has_word(text: str, words: List[str]) -> bool:
     return any(re.search(r"\b" + re.escape(w), t) for w in words)
 
 # =============================================================
-# CTA ТА SEO (ЗАКЛИК ПИСАТИ "+" У КОМЕНТАРЯХ)
+# CTA ТА SEO (ШАПКА ПРОФІЛЮ + "+" У КОМЕНТАРЯХ)
 # =============================================================
 def get_adaptive_cta(combined: str) -> Dict[str, str]:
     t = combined.lower()
 
     if has_word(t, ["тцк", "мобілізац", "повістк", "військком"]):
-        voice_cta = "Повне відео конфлікту та офіційну реакцію вже виклали в нашому Телеграм каналі Ньюз Україна 365. Хто хоче посилання, пишіть плюс у коментарях!"
-        comment = "👇 Хто хоче глянути повне відео та деталі — пишіть «+» у коментарях, скину наш Telegram (NEWS УКРАЇНА 365)!"
+        voice_cta = "Повне відео конфлікту та офіційну реакцію дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю, або ставте плюс у коментарях, і я скину вам посилання!"
+        comment = "👇 Повне відео та деталі — за посиланням у шапці профілю, або пишіть «+» у коментарях, скину наш Telegram (NEWS УКРАЇНА 365)!"
         reply_plus = "Ось наш Telegram 👉 шукай в пошуку: NEWS УКРАЇНА 365 (@kropivnit) або тисни посилання в шапці профілю!"
 
     elif has_word(t, ["відключен", "блекаут", "дтек", "графік", "обленерго", "електроенерг", "без світла", "без електрики", "електрик"]):
-        voice_cta = "Точні графіки відключень для вашого міста вже опубліковані в нашому Телеграм каналі Ньюз Україна 365. Хто хоче в канал, ставте плюс у коментарях!"
-        comment = "⚡ Кому потрібні точні графіки світла по областях — пишіть «+» у коментарях, одразу скину наш Telegram!"
+        voice_cta = "Точні графіки відключень для вашого міста дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю, або пишіть плюс у коментарях!"
+        comment = "⚡ Точні графіки світла по областях — у шапці профілю, або пишіть «+» у коментарях, одразу скину наш Telegram!"
         reply_plus = "Графіки тут 👉 шукай в Telegram: NEWS УКРАЇНА 365 (@kropivnit) або за посиланням у шапці профілю!"
 
     elif has_word(t, ["обстріл", "удар", "ракета", "шахед", "вибух", "евакуац", "атакув", "загибл"]):
-        voice_cta = "Оперативні кадри з місця подій та детальну інформацію дивіться в нашому Телеграм каналі Ньюз Україна 365. Пишіть плюс у коментарях, і я скину посилання!"
-        comment = "🚨 Усі оперативні новини, фото та відео без затримок у нашому Telegram. Хто хоче в канал — ставте «+» у коментарях!"
+        voice_cta = "Оперативні кадри з місця подій та детальну інформацію дивіться в нашому Телеграм каналі Ньюз Україна 365 у шапці профілю, або ставте плюс у коментарях, і я скину посилання!"
+        comment = "🚨 Усі оперативні новини, фото та відео — у шапці профілю, або ставте «+» у коментарях, скину посилання!"
         reply_plus = "Ось канал 👉 шукай в Telegram: NEWS УКРАЇНА 365 (@kropivnit) або переходь за посиланням у шапці профілю!"
 
     elif has_word(t, ["путін", "переговор", "трамп", "зеленськ", "янукович"]):
-        voice_cta = "Повне відео виступу та головні заяви без вирізок вже в нашому Телеграм каналі Ньюз Україна 365. Хто хоче посилання, пишіть плюс у коментарях!"
-        comment = "🔥 Повний розбір та відео без вирізок уже в нашому Telegram. Пишіть «+» у коментарях, хто хоче посилання!"
+        voice_cta = "Повне відео виступу та головні заяви без вирізок дивіться в нашому Телеграм каналі Ньюз Україна 365 у шапці профілю, або пишіть плюс у коментарях!"
+        comment = "🔥 Повний розбір та відео без вирізок — у шапці профілю, або пишіть «+» у коментарях, хто хоче посилання!"
         reply_plus = "Тримай 👉 шукай в Telegram: NEWS УКРАЇНА 365 (@kropivnit) або тисни посилання в шапці профілю!"
 
     else:
-        voice_cta = "Більше ексклюзивних новин та відео без цензури дивіться в нашому Телеграм каналі Ньюз Україна 365. Хто хоче в канал, пишіть плюс у коментарях!"
-        comment = "👉 Хто хоче в наш Telegram-канал новин — ставте «+» у коментарях, одразу скину посилання!"
+        voice_cta = "Більше ексклюзивних новин та відео без цензури дивіться в нашому Телеграм каналі Ньюз Україна 365 за посиланням у шапці профілю, або пишіть плюс у коментарях!"
+        comment = "👉 Посилання на наш Telegram-канал у шапці профілю, або ставте «+» у коментарях — одразу скину!"
         reply_plus = "Ось наш Telegram 👉 шукай в пошуку: NEWS УКРАЇНА 365 (@kropivnit) або переходь у шапку профілю!"
 
     return {
@@ -317,7 +317,7 @@ def _fmt_ass_time(sec: float) -> str:
     return f"{int(sec // 3600)}:{int((sec % 3600) // 60):02d}:{int(sec % 60):02d}.{int((sec - int(sec)) * 100):02d}"
 
 # =============================================================
-# ВІДЕО-ДВИЖОК (ОДНЕ ВІДЕО БЕЗ НАКЛАДАННЯ ВОТЕРМАРКИ НА ТЕКСТ)
+# ВІДЕО-ДВИЖОК
 # =============================================================
 class VideoEngine:
     def __init__(self):
@@ -339,35 +339,17 @@ class VideoEngine:
         # Темна плашка шапки в безпечній зоні TikTok (Y=220..header_bottom)
         d.rectangle([0, 220, W, header_bottom], fill=(5, 8, 14, 195))
 
-        # Бейдж "ТЕРМІНОВО" зліва на Y=256..316 (ширина строго під текст)
+        # Бейдж "ТЕРМІНОВО" зліва на Y=256..316
         badge_txt = "ТЕРМІНОВО"
         bw = int(d.textlength(badge_txt, font=self.font_badge)) + 40
         d.rounded_rectangle([40, 256, 40 + bw, 316], radius=12, fill=(225, 25, 35, 255))
         d.text((60, 270), badge_txt, font=self.font_badge, fill=(255, 255, 255, 255))
 
-        # Вотермарка справа строго в рядку Y=256..316 (макс висота 60px, тому НЕ налазить на заголовок!)
-        wm_placed = False
-        if Config.WATERMARK_PATH.exists():
-            try:
-                with Image.open(Config.WATERMARK_PATH) as wm_img:
-                    wm_img = wm_img.convert("RGBA")
-                    max_h = 60
-                    max_w = 260
-                    scale = min(max_h / wm_img.height, max_w / wm_img.width)
-                    new_w = max(1, int(wm_img.width * scale))
-                    new_h = max(1, int(wm_img.height * scale))
-                    wm_img = wm_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-                    wy = 256 + (60 - new_h) // 2
-                    overlay.paste(wm_img, (W - new_w - 40, wy), wm_img)
-                    wm_placed = True
-            except Exception:
-                wm_placed = False
-
-        if not wm_placed:
-            wm = Config.CHANNEL_DISPLAY_NAME
-            wm_w = int(d.textlength(wm, font=self.font_watermark))
-            d.rounded_rectangle([W - wm_w - 70, 256, W - 40, 316], radius=12, fill=(120, 50, 210, 240), outline=(255, 255, 255, 200), width=2)
-            d.text((W - wm_w - 55, 270), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
+        # Яскрава фірмова вотермарка справа строго в рядку Y=256..316
+        wm = Config.CHANNEL_DISPLAY_NAME
+        wm_w = int(d.textlength(wm, font=self.font_watermark))
+        d.rounded_rectangle([W - wm_w - 70, 256, W - 40, 316], radius=12, fill=(120, 50, 210, 245), outline=(255, 255, 255, 220), width=2)
+        d.text((W - wm_w - 55, 271), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
 
         # Заголовок на Y=345 (нижче бейджа й вотермарки)
         cur_hy = 345
@@ -376,19 +358,19 @@ class VideoEngine:
             cur_hy += 48
         d.line([(40, cur_hy + 8), (W - 40, cur_hy + 8)], fill=(255, 215, 0, 240), width=3)
 
-        # Нижній CTA-банер на Y=1360..1480 (над інтерфейсом TikTok)
+        # Нижній CTA-банер на Y=1360..1480 (чистий банер без "+")
         y_off = 1360
         d.rounded_rectangle([40, y_off + 20, W - 40, y_off + 140], radius=20, fill=(18, 25, 38, 245), outline=(42, 171, 238, 255), width=2)
-        c_txt = "ПИШИ «+» В КОМЕНТАРЯХ — ДАМ ТГ ➔"
+        c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
         cw = d.textlength(c_txt, font=self.font_cta)
         d.text(((W - cw) // 2, y_off + 42), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
-        sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME} ({Config.CHANNEL_USERNAME})"
+        sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME}"
         d.text(((W - d.textlength(sub_t, font=self.font_badge)) // 2, y_off + 88), sub_t, font=self.font_badge, fill=(42, 171, 238, 255))
 
         overlay.save(out_png, "PNG")
 
     def _build_ass(self, sub_events: List[Dict], out_ass: Path):
-        primary = "&H000ADCFF"  # Фірмові жовті субтитри з чорною обводкою
+        primary = "&H000ADCFF"
         header = (
             "[Script Info]\nScriptType: v4.00+\n"
             f"PlayResX: {Config.VIDEO_WIDTH}\nPlayResY: {Config.VIDEO_HEIGHT}\nWrapStyle: 0\n\n"
@@ -662,7 +644,7 @@ video { width: 100%; max-height: 520px; border-radius: 14px; background: #000; b
 <div class="wrap">
   <header>
     <h1>🎬 News Studio · 365</h1>
-    <p class="subtitle">Повна новина з автосубтитрами та збором «+» у коментарях для переливу в Telegram.</p>
+    <p class="subtitle">Повна новина з автосубтитрами та переливом у Telegram.</p>
   </header>
   <div class="box">
     <textarea id="pTxt" placeholder="Вставте сюди текст новини..." autofocus></textarea>
