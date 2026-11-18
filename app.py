@@ -465,18 +465,36 @@ class VideoEngine:
         grad = Image.linear_gradient("L").resize((w, h))
         base = ImageOps.colorize(grad, black=(10, 20, 50), white=(2, 5, 15)).convert("RGBA")
 
+        # Неонові дуги + світлові кулі (на зменшеному полотні для миттєвого blur на Render)
         sw, sh = 270, 480
-        glow = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow)
+        overlay = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
         colors = [(40, 150, 255), (100, 80, 255)]
-        for _ in range(5):
-            cx, cy = random.randint(-40, sw + 40), random.randint(-60, sh + 60)
-            r = random.randint(60, 150)
+
+        for i in range(4):
+            cx, cy = sw // 2, sh // 2
+            r = 75 + i * 38
+            od.arc([cx - r, cy - r, cx + r, cy + r], start=random.randint(0, 180), end=random.randint(180, 360), fill=random.choice(colors) + (random.randint(45, 90),), width=random.randint(4, 10))
+
+        for _ in range(6):
+            cx, cy = random.randint(-50, sw + 50), random.randint(-75, sh + 75)
+            r = random.randint(50, 125)
             c = random.choice(colors)
-            gd.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*c, random.randint(35, 75)))
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=22)).resize((w, h), Image.Resampling.BILINEAR)
-        base = Image.alpha_composite(base, glow)
-        base.convert("RGB").save(out_path, "JPEG", quality=90)
+            od.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*c, random.randint(25, 65)))
+
+        overlay = overlay.filter(ImageFilter.GaussianBlur(radius=20)).resize((w, h), Image.Resampling.BILINEAR)
+        base = Image.alpha_composite(base, overlay)
+
+        # Технологічна сітка
+        grid = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(grid)
+        for x in range(0, w, 80):
+            gd.line([(x, 0), (x, h)], fill=(255, 255, 255, 12), width=1)
+        for y in range(0, h, 80):
+            gd.line([(0, y), (w, y)], fill=(255, 255, 255, 12), width=1)
+
+        base = Image.alpha_composite(base, grid)
+        base.convert("RGB").save(out_path, "JPEG", quality=92)
 
 # =============================================================
 # ГЕНЕРАЦІЯ ТА ЧЕРГА
