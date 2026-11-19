@@ -97,10 +97,10 @@ def sanitize_text(text: str) -> str:
 
 def has_word(text: str, words: List[str]) -> bool:
     t = text.lower()
-    return any([invalid URL](r"\b" + re.escape(w), t) for w in words)
+    return any(re.search(r"\b" + re.escape(w), t) for w in words)
 
 # =============================================================
-# CTA ТА SEO (ШАПКА ПРОФІЛЮ + "+" У КОМЕНТАРЯХ)
+# CTA ТА SEO (ЗАКЛИК ПИСАТИ "+" У КОМЕНТАРЯХ)
 # =============================================================
 def get_adaptive_cta(combined: str) -> Dict[str, str]:
     t = combined.lower()
@@ -177,12 +177,12 @@ def generate_seo(headline: str, body: str) -> str:
     if clean_body and clean_body.lower() != clean_head.lower():
         main_text += f"\n\n{clean_body[:550]}"
 
-    return f"{main_text}\n\n{q}\n\n🔎 Telegram: NEWS УКРАЇНА 365 ([invalid URL])\n\n{' '.join(all_tags)}"
+    return f"{main_text}\n\n{q}\n\n🔎 Telegram: NEWS УКРАЇНА 365 (t.me/kropivnit)\n\n{' '.join(all_tags)}"
 
 # =============================================================
 # ПАРСЕР ПОСТА
 # =============================================================
-_dummy_img = [invalid URL]("RGBA", (1, 1))
+_dummy_img = Image.new("RGBA", (1, 1))
 _dummy_draw = ImageDraw.Draw(_dummy_img)
 
 def wrap_text_lines(text: str, font: ImageFont.FreeTypeFont, max_w: int) -> List[str]:
@@ -240,10 +240,10 @@ class TTSEngine:
         if out_vtt:
             cmd += ["--write-subtitles", str(out_vtt)]
 
-        r = [invalid URL](cmd, capture_output=True, text=True, timeout=45)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         if r.returncode != 0 and out_vtt:
             cmd_fb = ["edge-tts", "--voice", voice, "--rate", "+6%", "--text", safe, "--write-media", str(out_audio)]
-            r = [invalid URL](cmd_fb, capture_output=True, text=True, timeout=45)
+            r = subprocess.run(cmd_fb, capture_output=True, text=True, timeout=45)
         if r.returncode != 0:
             raise RuntimeError(f"TTS помилка: {r.stderr[:200]}")
 
@@ -253,7 +253,7 @@ class TTSEngine:
     @classmethod
     def _duration(cls, p: Path) -> float:
         try:
-            r = [invalid URL](
+            r = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(p)],
                 capture_output=True, text=True, timeout=10
             )
@@ -278,7 +278,7 @@ class TTSEngine:
             time_match = None
             text_lines = []
             for line in lines:
-                m = [invalid URL](line)
+                m = pattern.search(line)
                 if m:
                     time_match = m
                 elif time_match:
@@ -320,7 +320,7 @@ def _fmt_ass_time(sec: float) -> str:
     return f"{int(sec // 3600)}:{int((sec % 3600) // 60):02d}:{int(sec % 60):02d}.{int((sec - int(sec)) * 100):02d}"
 
 # =============================================================
-# ВІДЕО-ДВИЖОК (ШВИДКИЙ HD 720x1280 @ 20 FPS ДЛЯ RENDER)
+# ВІДЕО-ДВИЖОК (ОДНЕ ВІДЕО БЕЗ НАКЛАДАННЯ ВОТЕРМАРКИ НА ТЕКСТ)
 # =============================================================
 class VideoEngine:
     def __init__(self):
@@ -330,8 +330,8 @@ class VideoEngine:
         self.font_watermark = _load_font(18)
 
     def _build_overlay(self, parsed: Dict, out_png: Path):
-        W = [invalid URL]_WIDTH
-        overlay = [invalid URL]("RGBA", (W, [invalid URL]_HEIGHT), (0, 0, 0, 0))
+        W = Config.VIDEO_WIDTH
+        overlay = Image.new("RGBA", (W, Config.VIDEO_HEIGHT), (0, 0, 0, 0))
         d = ImageDraw.Draw(overlay)
 
         headline_clean = sanitize_text(parsed["headline"]) or "ТЕРМІНОВА НОВИНА"
@@ -345,7 +345,7 @@ class VideoEngine:
         d.rounded_rectangle([26, 170, 26 + bw, 210], radius=8, fill=(225, 25, 35, 255))
         d.text((40, 180), badge_txt, font=self.font_badge, fill=(255, 255, 255, 255))
 
-        wm = [invalid URL]_DISPLAY_NAME
+        wm = Config.CHANNEL_DISPLAY_NAME
         wm_w = int(d.textlength(wm, font=self.font_watermark))
         d.rounded_rectangle([W - wm_w - 46, 170, W - 26, 210], radius=8, fill=(120, 50, 210, 245), outline=(255, 255, 255, 220), width=2)
         d.text((W - wm_w - 36, 180), wm, font=self.font_watermark, fill=(255, 255, 255, 255))
@@ -361,16 +361,16 @@ class VideoEngine:
         c_txt = "ПОВНІ ДЕТАЛІ В ШАПЦІ ПРОФІЛЮ ➔"
         cw = d.textlength(c_txt, font=self.font_cta)
         d.text(((W - cw) // 2, y_off + 28), c_txt, font=self.font_cta, fill=(255, 255, 255, 255))
-        sub_t = f"Telegram: {[invalid URL]_DISPLAY_NAME}"
+        sub_t = f"Telegram: {Config.CHANNEL_DISPLAY_NAME}"
         d.text(((W - d.textlength(sub_t, font=self.font_badge)) // 2, y_off + 58), sub_t, font=self.font_badge, fill=(42, 171, 238, 255))
 
-        [invalid URL](out_png, "PNG")
+        overlay.save(out_png, "PNG")
 
     def _build_ass(self, sub_events: List[Dict], out_ass: Path):
         primary = "&H000ADCFF"
         header = (
             "[Script Info]\nScriptType: v4.00+\n"
-            f"PlayResX: {[invalid URL]_WIDTH}\nPlayResY: {[invalid URL]_HEIGHT}\nWrapStyle: 0\n\n"
+            f"PlayResX: {Config.VIDEO_WIDTH}\nPlayResY: {Config.VIDEO_HEIGHT}\nWrapStyle: 0\n\n"
             "[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
             f"Style: Default,DejaVu Sans,46,{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,26,26,465,1\n\n"
             "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -400,18 +400,18 @@ class VideoEngine:
                 is_video_media = True
             else:
                 try:
-                    with [invalid URL](media_path) as im:
+                    with Image.open(media_path) as im:
                         im = im.convert("RGB")
                         ow, oh = im.size
-                        tr = [invalid URL]_WIDTH / [invalid URL]_HEIGHT
+                        tr = Config.VIDEO_WIDTH / Config.VIDEO_HEIGHT
                         if ow / oh > tr:
                             nw = int(oh * tr)
                             c_box = ((ow - nw) // 2, 0, (ow + nw) // 2, oh)
                         else:
                             nh = int(ow / tr)
                             c_box = (0, (oh - nh) // 2, ow, (oh + nh) // 2)
-                        im_crop = im.crop(c_box).resize(([invalid URL]_WIDTH, [invalid URL]_HEIGHT))
-                        dim = [invalid URL]("RGBA", ([invalid URL]_WIDTH, [invalid URL]_HEIGHT), (6, 10, 18, 115))
+                        im_crop = im.crop(c_box).resize((Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT))
+                        dim = Image.new("RGBA", (Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT), (6, 10, 18, 115))
                         im_crop.paste(dim, (0, 0), dim)
                         im_crop.save(bg_img_file, "JPEG", quality=92)
                 except Exception:
@@ -424,8 +424,8 @@ class VideoEngine:
         try:
             if is_video_media:
                 fc = (
-                    f"[0:v]fps={[invalid URL]_FPS},split=2[v1][v2];"
-                    f"[v1]scale=90:160:force_original_aspect_ratio=increase,crop=90:160,scale={[invalid URL]_WIDTH}:{[invalid URL]_HEIGHT}:flags=bilinear,setsar=1,drawbox=x=0:y=0:w={[invalid URL]_WIDTH}:h={[invalid URL]_HEIGHT}:color=black@0.50:t=fill[bg];"
+                    f"[0:v]fps={Config.VIDEO_FPS},split=2[v1][v2];"
+                    f"[v1]scale=90:160:force_original_aspect_ratio=increase,crop=90:160,scale={Config.VIDEO_WIDTH}:{Config.VIDEO_HEIGHT}:flags=bilinear,setsar=1,drawbox=x=0:y=0:w={Config.VIDEO_WIDTH}:h={Config.VIDEO_HEIGHT}:color=black@0.50:t=fill[bg];"
                     f"[v2]scale=666:1250:force_original_aspect_ratio=decrease:flags=fast_bilinear,setsar=1[fg];"
                     f"[bg][fg]overlay=(W-w)/2:(H-h)/2-14[comp];[comp][2:v]overlay=0:0,ass={ass_file.name}[outv]"
                 )
@@ -433,7 +433,7 @@ class VideoEngine:
                     "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(media_path.resolve()),
                     "-i", str(audio_path.resolve()), "-i", str(overlay_png.resolve()),
                     "-filter_complex", fc, "-map", "[outv]", "-map", "1:a",
-                    "-t", f"{duration:.2f}", "-r", str([invalid URL]_FPS),
+                    "-t", f"{duration:.2f}", "-r", str(Config.VIDEO_FPS),
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "27",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
                     "-threads", "2", "-movflags", "+faststart", str(out_file.resolve())
@@ -441,7 +441,7 @@ class VideoEngine:
             else:
                 fc = f"[0:v][2:v]overlay=0:0,ass={ass_file.name}[outv]"
                 cmd = [
-                    "ffmpeg", "-y", "-loop", "1", "-framerate", str([invalid URL]_FPS),
+                    "ffmpeg", "-y", "-loop", "1", "-framerate", str(Config.VIDEO_FPS),
                     "-i", str(bg_img_file.resolve()), "-i", str(audio_path.resolve()), "-i", str(overlay_png.resolve()),
                     "-filter_complex", fc, "-map", "[outv]", "-map", "1:a",
                     "-t", f"{duration:.2f}", "-c:v", "libx264", "-preset", "ultrafast",
@@ -450,7 +450,7 @@ class VideoEngine:
                     str(out_file.resolve())
                 ]
 
-            proc = [invalid URL](cmd, cwd=str(Config.TEMP_DIR), capture_output=True, text=True, timeout=600)
+            proc = subprocess.run(cmd, cwd=str(Config.TEMP_DIR), capture_output=True, text=True, timeout=600)
             if proc.returncode != 0:
                 raise RuntimeError(f"ffmpeg: {proc.stderr[-400:]}")
         finally:
@@ -462,12 +462,12 @@ class VideoEngine:
                         pass
 
     def _create_branded_bg(self, out_path: Path):
-        w, h = [invalid URL]_WIDTH, [invalid URL]_HEIGHT
+        w, h = Config.VIDEO_WIDTH, Config.VIDEO_HEIGHT
         grad = Image.linear_gradient("L").resize((w, h))
         base = ImageOps.colorize(grad, black=(10, 20, 50), white=(2, 5, 15)).convert("RGBA")
 
         sw, sh = 180, 320
-        overlay = [invalid URL]("RGBA", (sw, sh), (0, 0, 0, 0))
+        overlay = Image.new("RGBA", (sw, sh), (0, 0, 0, 0))
         od = ImageDraw.Draw(overlay)
         colors = [(40, 150, 255), (100, 80, 255)]
 
@@ -485,7 +485,7 @@ class VideoEngine:
         overlay = overlay.filter(ImageFilter.GaussianBlur(radius=14)).resize((w, h), Image.Resampling.BILINEAR)
         base = Image.alpha_composite(base, overlay)
 
-        grid = [invalid URL]("RGBA", (w, h), (0, 0, 0, 0))
+        grid = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         gd = ImageDraw.Draw(grid)
         for x in range(0, w, 54):
             gd.line([(x, 0), (x, h)], fill=(255, 255, 255, 12), width=1)
@@ -515,8 +515,8 @@ def _worker_single(job_id: str, text: str, voice: str, saved_media: Optional[Pat
         audio_path, duration, vtt_path = TTSEngine.generate(parsed["voiceover"], temp_audio, voice, temp_vtt)
         sub_events = TTSEngine.get_grouped_subtitles(vtt_path, parsed["voiceover"], duration)
 
-        _set(step="🎬 Монтую відео у форматі HD 9:16...", progress=65)
-        out_file = Config.OUTPUT_DIR / f"news_{[invalid URL]().strftime('%Y%m%d_%H%M%S')}_{uid}.mp4"
+        _set(step="🎬 Монтую відео у форматі Full HD 9:16...", progress=65)
+        out_file = Config.OUTPUT_DIR / f"news_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uid}.mp4"
         VideoEngine().render(parsed, audio_path, sub_events, out_file, duration, saved_media)
 
         for tmp in [temp_audio, temp_vtt]:
@@ -557,7 +557,7 @@ def _cleanup_worker():
                     if JOBS[jid].get("done") and (now - JOBS[jid].get("finished_at", 0)) > Config.JOB_TTL_SECONDS:
                         del JOBS[jid]
             for f in Config.OUTPUT_DIR.glob("*.mp4"):
-                if (now - f.stat().st_mtime) > [invalid URL]_TTL_SECONDS:
+                if (now - f.stat().st_mtime) > Config.VIDEO_TTL_SECONDS:
                     f.unlink()
         except Exception:
             pass
@@ -630,7 +630,7 @@ video { width: 100%; max-height: 520px; border-radius: 14px; background: #000; b
 .soc-fb { background: #1877F2; color: #fff; }
 .soc-th { background: #101010; color: #fff; border: 1px solid #333; }
 #toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); padding: 14px 24px; border-radius: 12px; font-weight: 800; font-size: 14px; opacity: 0; transition: .3s; z-index: 9999; pointer-events: none; }
-#[invalid URL] { opacity: 1; transform: translateX(-50%) translateY(0); }
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.err { background: var(--red); color: #fff; } #toast.ok { background: var(--green); color: #000; }
 </style>
 </head>
@@ -638,7 +638,7 @@ video { width: 100%; max-height: 520px; border-radius: 14px; background: #000; b
 <div class="wrap">
   <header>
     <h1>🎬 News Studio · 365</h1>
-    <p class="subtitle">Повна новина з автосубтитрами та переливом у Telegram.</p>
+    <p class="subtitle">Повна новина з автосубтитрами та збором «+» у коментарях для переливу в Telegram.</p>
   </header>
   <div class="box">
     <textarea id="pTxt" placeholder="Вставте сюди текст новини..." autofocus></textarea>
@@ -720,7 +720,7 @@ function toast(msg, type) {
 function showF(i) {
   if (i.files && i.files[0]) {
     selectedFile = i.files[0];
-    document.getElementById('mTxt').innerText = '✓ ' + [invalid URL];
+    document.getElementById('mTxt').innerText = '✓ ' + selectedFile.name;
   }
 }
 
@@ -757,8 +757,8 @@ async function genVideo() {
 
       if (job.error) throw new Error(job.error);
       if (job.done && job.result) {
-        document.getElementById('vidRes').src = [invalid URL]_url;
-        document.getElementById('dlRes').href = [invalid URL]_url;
+        document.getElementById('vidRes').src = job.result.video_url;
+        document.getElementById('dlRes').href = job.result.video_url;
         document.getElementById('seoRes').textContent = job.result.seo_desc;
         document.getElementById('comRes').textContent = job.result.ready_comment;
         document.getElementById('repRes').textContent = job.result.reply_plus;
